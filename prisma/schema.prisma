@@ -16,6 +16,7 @@ model Company {
   users     User[]
   leads     Lead[]
   customers Customer[]
+  deals     Deal[]
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -36,6 +37,7 @@ model User {
   company    Company  @relation(fields: [companyId], references: [id])
   files      File[]
   leads      Lead[]   @relation("AssignedLeads")
+  deals      Deal[]   @relation("AssignedDeals")
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
@@ -100,9 +102,35 @@ model Customer {
   leadId         String?  @unique
   lead           Lead?    @relation(fields: [leadId], references: [id])
 
+  deals          Deal[]
+
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
   @@map("customers")
+}
+
+model Deal {
+  id             String   @id @default(uuid())
+  title          String
+  value          Float
+  stage          String   @default("New Deal") // New Deal, Requirement Shared, Quotation Sent, Follow-up, Negotiation, Won, Lost
+  closingDate    DateTime?
+  probability    Int      @default(10)
+  notes          String?  @db.Text
+  
+  salespersonId  String?
+  salesperson    User?    @relation("AssignedDeals", fields: [salespersonId], references: [id], onDelete: SetNull)
+  
+  customerId     String?
+  customer       Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  
+  companyId      String
+  company        Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@map("deals")
 }
 
