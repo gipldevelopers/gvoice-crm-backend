@@ -1,0 +1,67 @@
+// Customer Module API Tests
+
+### Base URL
+@baseUrl = http://localhost:5050/api/customers
+// @token = your_jwt_token_here
+
+### 1. Get all customers
+GET {{baseUrl}}
+Authorization: Bearer {{token}}
+
+###
+
+### 2. Search customers
+GET {{baseUrl}}?search=tech
+Authorization: Bearer {{token}}
+
+###
+
+### 3. Create a new customer (Directly)
+POST {{baseUrl}}
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "type": "Company",
+  "name": "Acme Corp",
+  "contactPerson": "John Smith",
+  "email": "john@acme.com",
+  "phone": "+1 234 567 8900",
+  "city": "New York",
+  "status": "Active"
+}
+
+###
+
+### 4. Convert Lead to Customer
+POST {{baseUrl}}/convert-lead
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "leadId": "UUID_OF_CONVERTED_LEAD"
+}
+
+###
+
+### 5. Get customer by ID
+GET {{baseUrl}}/CUSTOMER_UUID
+Authorization: Bearer {{token}}
+
+###
+
+### 6. Update customer
+PUT {{baseUrl}}/CUSTOMER_UUID
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "notes": "Updated notes via API",
+  "status": "Inactive"
+}
+
+###
+
+### 7. Delete customer
+DELETE {{baseUrl}}/CUSTOMER_UUID
+Authorization: Bearer {{token}}

@@ -2,11 +2,10 @@
 // You can use this with tools like Postman, Insomnia, or REST Client VS Code extension
 
 ### Base URL
-// @baseUrl = http://localhost:5000/api/leads
-// @token = your_jwt_token_here
+@baseUrl = http://localhost:5050/api/leads
 
 ### 1. Create a new lead
-POST http://localhost:5000/api/leads
+POST {{baseUrl}}
 Content-Type: application/json
 Authorization: Bearer {{token}}
 
@@ -23,28 +22,33 @@ Authorization: Bearer {{token}}
 ###
 
 ### 2. Get all leads
-GET http://localhost:5000/api/leads
+GET {{baseUrl}}
+Authorization: Bearer {{token}}
 
 ###
 
 ### 3. Get all leads with search filter
-GET http://localhost:5000/api/leads?search=rahul
+GET {{baseUrl}}?search=rahul
+Authorization: Bearer {{token}}
 
 ###
 
 ### 4. Get all leads with status filter
-GET http://localhost:5000/api/leads?status=New
+GET {{baseUrl}}?status=New
+Authorization: Bearer {{token}}
 
 ###
 
 ### 5. Get lead by ID (replace {leadId} with actual ID)
-GET http://localhost:5000/api/leads/{leadId}
+GET {{baseUrl}}/YOUR_LEAD_ID_HERE
+Authorization: Bearer {{token}}
 
 ###
 
-### 6. Update lead (replace {leadId} with actual ID)
-PUT http://localhost:5000/api/leads/{leadId}
+### 6. Update lead
+PUT {{baseUrl}}/YOUR_LEAD_ID_HERE
 Content-Type: application/json
+Authorization: Bearer {{token}}
 
 {
   "status": "Contacted",
@@ -53,22 +57,19 @@ Content-Type: application/json
 
 ###
 
-### 7. Delete lead (replace {leadId} with actual ID)
-DELETE http://localhost:5000/api/leads/{leadId}
+### 7. Delete lead
+DELETE {{baseUrl}}/YOUR_LEAD_ID_HERE
+Authorization: Bearer {{token}}
 
 ###
 
 ### 8. Get lead statistics
-GET http://localhost:5000/api/leads/stats
+GET {{baseUrl}}/stats
+Authorization: Bearer {{token}}
 
 ###
 
 ### 9. Get lead statistics with date range
-GET http://localhost:5000/api/leads/stats?startDate=2024-01-01&endDate=2024-12-31
+GET {{baseUrl}}/stats?startDate=2024-01-01&endDate=2024-12-31
+Authorization: Bearer {{token}}
 
-###
-
-### 10. Get leads by salesperson (replace {salespersonId} with actual ID)
-GET http://localhost:5000/api/leads/salesperson/{salespersonId}
-
-###
