@@ -5,12 +5,14 @@ const router = express.Router();
 const demoRoutes = require('./demo/demo.routes');
 const authRoutes = require('./auth/auth.routes');
 const leadRoutes = require('./leads/lead.routes');
+const employeeRoutes = require('./employees/employee.routes');
 const customerRoutes = require('./customers/customer.routes');
 
 // Define routes
 router.use('/demo', demoRoutes);
 router.use('/auth', authRoutes);
 router.use('/leads', leadRoutes);
+router.use('/employees', employeeRoutes);
 router.use('/customers', customerRoutes);
 
 module.exports = router;
