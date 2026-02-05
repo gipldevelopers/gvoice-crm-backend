@@ -136,7 +136,17 @@ class DealService {
                     ...(dealData.value !== undefined && { value: parseFloat(dealData.value) }),
                     ...(dealData.stage && { stage: dealData.stage }),
                     ...(dealData.closingDate !== undefined && { closingDate: dealData.closingDate ? new Date(dealData.closingDate) : null }),
-                    ...(dealData.probability !== undefined && { probability: parseInt(dealData.probability) }),
+                    ...(dealData.probability !== undefined ? { probability: parseInt(dealData.probability) } : (dealData.stage && {
+                        probability: {
+                            'New Deal': 10,
+                            'Requirement Shared': 30,
+                            'Quotation Sent': 50,
+                            'Follow-up': 60,
+                            'Negotiation': 80,
+                            'Won': 100,
+                            'Lost': 0
+                        }[dealData.stage] ?? existingDeal.probability
+                    })),
                     ...(dealData.notes !== undefined && { notes: dealData.notes }),
                     ...(dealData.salespersonId !== undefined && { salespersonId: dealData.salespersonId }),
                     ...(dealData.customerId !== undefined && { customerId: dealData.customerId }),
