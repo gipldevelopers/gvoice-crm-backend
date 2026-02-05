@@ -1,0 +1,74 @@
+// Test file for Lead API endpoints
+// You can use this with tools like Postman, Insomnia, or REST Client VS Code extension
+
+### Base URL
+// @baseUrl = http://localhost:5000/api/leads
+// @token = your_jwt_token_here
+
+### 1. Create a new lead
+POST http://localhost:5000/api/leads
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "name": "Rahul Sharma",
+  "phone": "+91 98765 43210",
+  "email": "rahul@tech.com",
+  "source": "Website",
+  "value": 4500,
+  "status": "New",
+  "notes": "Interested in premium plan. Follow up on Monday."
+}
+
+###
+
+### 2. Get all leads
+GET http://localhost:5000/api/leads
+
+###
+
+### 3. Get all leads with search filter
+GET http://localhost:5000/api/leads?search=rahul
+
+###
+
+### 4. Get all leads with status filter
+GET http://localhost:5000/api/leads?status=New
+
+###
+
+### 5. Get lead by ID (replace {leadId} with actual ID)
+GET http://localhost:5000/api/leads/{leadId}
+
+###
+
+### 6. Update lead (replace {leadId} with actual ID)
+PUT http://localhost:5000/api/leads/{leadId}
+Content-Type: application/json
+
+{
+  "status": "Contacted",
+  "notes": "Called and discussed requirements"
+}
+
+###
+
+### 7. Delete lead (replace {leadId} with actual ID)
+DELETE http://localhost:5000/api/leads/{leadId}
+
+###
+
+### 8. Get lead statistics
+GET http://localhost:5000/api/leads/stats
+
+###
+
+### 9. Get lead statistics with date range
+GET http://localhost:5000/api/leads/stats?startDate=2024-01-01&endDate=2024-12-31
+
+###
+
+### 10. Get leads by salesperson (replace {salespersonId} with actual ID)
+GET http://localhost:5000/api/leads/salesperson/{salespersonId}
+
+###
