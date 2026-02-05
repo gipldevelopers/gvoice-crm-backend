@@ -15,6 +15,7 @@ model Company {
   gstNo     String?
   users     User[]
   leads     Lead[]
+  customers Customer[]
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -69,9 +70,39 @@ model Lead {
   salesperson    User?    @relation("AssignedLeads", fields: [salespersonId], references: [id], onDelete: SetNull)
   companyId      String
   company        Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  customer       Customer?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
   @@map("leads")
+}
+
+model Customer {
+  id             String   @id @default(uuid())
+  type           String   @default("Company") // Company, Individual
+  name           String
+  contactPerson  String?
+  email          String
+  phone          String
+  alternatePhone String?
+  gst            String?
+  address        String?
+  city           String?
+  state          String?
+  pincode        String?
+  notes          String?  @db.Text
+  status         String   @default("Active") // Active, Inactive
+
+  companyId      String
+  company        Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  
+  // Link to the lead this customer came from (optional)
+  leadId         String?  @unique
+  lead           Lead?    @relation(fields: [leadId], references: [id])
+
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@map("customers")
 }
 
