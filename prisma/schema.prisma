@@ -16,6 +16,7 @@ model Company {
   users     User[]
   leads     Lead[]
   customers Customer[]
+  tasks     Task[]
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -106,3 +107,28 @@ model Customer {
   @@map("customers")
 }
 
+model Task {
+  id          String   @id @default(cuid())
+  title       String
+  type        String   // Call, Meeting, Email, WhatsApp
+  linkedType  String   // Lead, Customer, Deal
+  linkedId    String?  // ID of the linked entity
+  linkedTo    String?  // Name of the linked entity
+  assignedTo  String
+  dueDate     DateTime
+  dueTime     String
+  status      String   @default("Pending") // Pending, Completed
+  priority    String   @default("Medium")  // High, Medium, Low
+  notes       String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  // Relations
+  companyId   String
+  company     Company  @relation(fields: [companyId], references: [id])
+  
+  @@index([companyId])
+  @@index([status])
+  @@index([priority])
+  @@index([dueDate])
+}
