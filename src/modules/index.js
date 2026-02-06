@@ -7,6 +7,7 @@ const authRoutes = require('./auth/auth.routes');
 const leadRoutes = require('./leads/lead.routes');
 const employeeRoutes = require('./employees/employee.routes');
 const customerRoutes = require('./customers/customer.routes');
+const taskRoutes = require('./tasks/task.routes');
 const dealRoutes = require('./deals/deal.routes');
 
 // Define routes
@@ -15,6 +16,7 @@ router.use('/auth', authRoutes);
 router.use('/leads', leadRoutes);
 router.use('/employees', employeeRoutes);
 router.use('/customers', customerRoutes);
+router.use('/tasks', taskRoutes);
 router.use('/deals', dealRoutes);
 
 module.exports = router;
