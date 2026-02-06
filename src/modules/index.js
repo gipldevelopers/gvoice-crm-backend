@@ -9,6 +9,7 @@ const employeeRoutes = require('./employees/employee.routes');
 const customerRoutes = require('./customers/customer.routes');
 const taskRoutes = require('./tasks/task.routes');
 const dealRoutes = require('./deals/deal.routes');
+const dashboardRoutes = require('./dashboard/dashboard.routes');
 
 // Define routes
 router.use('/demo', demoRoutes);
@@ -18,6 +19,7 @@ router.use('/employees', employeeRoutes);
 router.use('/customers', customerRoutes);
 router.use('/tasks', taskRoutes);
 router.use('/deals', dealRoutes);
+router.use('/dashboard', dashboardRoutes);
 
 module.exports = router;
 
