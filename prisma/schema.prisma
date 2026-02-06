@@ -135,55 +135,6 @@ model Deal {
   @@map("deals")
 }
 
-model Deal {
-  id             String   @id @default(uuid())
-  title          String
-  value          Float
-  stage          String   @default("New Deal") // New Deal, Requirement Shared, Quotation Sent, Follow-up, Negotiation, Won, Lost
-  closingDate    DateTime?
-  probability    Int      @default(10)
-  notes          String?  @db.Text
-  
-  salespersonId  String?
-  salesperson    User?    @relation("AssignedDeals", fields: [salespersonId], references: [id], onDelete: SetNull)
-  
-  customerId     String?
-  customer       Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
-  
-  companyId      String
-  company        Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
-
-  @@map("deals")
-}
-
-model Task {
-  id          String   @id @default(cuid())
-  title       String
-  type        String   // Call, Meeting, Email, WhatsApp
-  linkedType  String   // Lead, Customer, Deal
-  linkedId    String?  // ID of the linked entity
-  linkedTo    String?  // Name of the linked entity
-  assignedTo  String
-  dueDate     DateTime
-  dueTime     String
-  status      String   @default("Pending") // Pending, Completed
-  priority    String   @default("Medium")  // High, Medium, Low
-  notes       String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-  
-  // Relations
-  companyId   String
-  company     Company  @relation(fields: [companyId], references: [id])
-  
-  @@index([companyId])
-  @@index([status])
-  @@index([priority])
-  @@index([dueDate])
-}
 model Task {
   id          String   @id @default(cuid())
   title       String
