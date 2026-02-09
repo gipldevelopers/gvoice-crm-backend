@@ -263,6 +263,98 @@ class LeadService {
             throw new Error(`Error fetching leads by salesperson: ${error.message}`);
         }
     }
+
+    // Assign a lead to a salesperson
+    async assignLead(leadId, salespersonId, companyId) {
+        try {
+            // First verify the lead belongs to the company
+            const existingLead = await prisma.lead.findFirst({
+                where: {
+                    id: leadId,
+                    companyId: companyId,
+                },
+            });
+
+            if (!existingLead) {
+                throw new Error('Lead not found');
+            }
+
+            // Verify salesperson exists and belongs to company (optional but recommended)
+            if (salespersonId) {
+                const salesperson = await prisma.user.findFirst({
+                    where: {
+                        id: salespersonId,
+                        companyId: companyId,
+                    },
+                });
+
+                if (!salesperson) {
+                    throw new Error('Salesperson not found');
+                }
+            }
+
+            const updatedLead = await prisma.lead.update({
+                where: {
+                    id: leadId,
+                },
+                data: {
+                    salespersonId: salespersonId,
+                },
+                include: {
+                    salesperson: {
+                        select: {
+                            id: true,
+                            fullName: true,
+                            email: true,
+                        },
+                    },
+                },
+            });
+
+            return updatedLead;
+        } catch (error) {
+            throw new Error(`Error assigning lead: ${error.message}`);
+        }
+    }
+
+    // Update lead status
+    async updateStatus(leadId, status, companyId) {
+        try {
+            // First verify the lead belongs to the company
+            const existingLead = await prisma.lead.findFirst({
+                where: {
+                    id: leadId,
+                    companyId: companyId,
+                },
+            });
+
+            if (!existingLead) {
+                throw new Error('Lead not found');
+            }
+
+            const updatedLead = await prisma.lead.update({
+                where: {
+                    id: leadId,
+                },
+                data: {
+                    status: status,
+                },
+                include: {
+                    salesperson: {
+                        select: {
+                            id: true,
+                            fullName: true,
+                            email: true,
+                        },
+                    },
+                },
+            });
+
+            return updatedLead;
+        } catch (error) {
+            throw new Error(`Error updating lead status: ${error.message}`);
+        }
+    }
 }
 
 module.exports = new LeadService();
