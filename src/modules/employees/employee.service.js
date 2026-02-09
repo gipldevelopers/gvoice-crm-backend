@@ -1,9 +1,32 @@
 const prisma = require('../../database/prisma');
 const bcrypt = require('bcryptjs');
 
-const getAllEmployees = async (companyId) => {
+const getAllEmployees = async (companyId, filters = {}) => {
+    const { department, role, search } = filters;
+
+    const where = {
+        companyId: companyId
+    };
+
+    if (department && department !== 'All') {
+        where.department = department;
+    }
+
+    if (role && role !== 'All') {
+        where.role = { equals: role, mode: 'insensitive' };
+    }
+
+    if (search && search.trim() !== '') {
+        where.OR = [
+            { fullName: { contains: search, mode: 'insensitive' } },
+            { email: { contains: search, mode: 'insensitive' } },
+            { phone: { contains: search, mode: 'insensitive' } },
+            { department: { contains: search, mode: 'insensitive' } }
+        ];
+    }
+
     return await prisma.user.findMany({
-        where: { companyId },
+        where,
         select: {
             id: true,
             username: true,
@@ -13,6 +36,9 @@ const getAllEmployees = async (companyId) => {
             department: true,
             role: true,
             createdAt: true
+        },
+        orderBy: {
+            fullName: 'asc'
         }
     });
 };
