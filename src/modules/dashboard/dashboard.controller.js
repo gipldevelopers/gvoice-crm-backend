@@ -19,6 +19,25 @@ class DashboardController {
             });
         }
     }
+
+    async getTrends(req, res) {
+        try {
+            const companyId = req.user.companyId;
+            const trends = await dashboardService.getDashboardTrends(companyId);
+
+            return res.status(200).json({
+                success: true,
+                message: 'Dashboard trends fetched successfully',
+                data: trends
+            });
+        } catch (error) {
+            console.error('Error in getTrends:', error);
+            return res.status(500).json({
+                success: false,
+                message: error.message || 'Error fetching dashboard trends'
+            });
+        }
+    }
 }
 
 module.exports = new DashboardController();

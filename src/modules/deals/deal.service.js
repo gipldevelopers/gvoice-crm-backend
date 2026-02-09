@@ -39,12 +39,36 @@ class DealService {
 
     async getAllDeals(companyId, filters = {}) {
         try {
-            const { search, stage, salespersonId } = filters;
+            const {
+                search,
+                stage,
+                salespersonId,
+                customerId,
+                startDate,
+                endDate,
+                minValue,
+                maxValue,
+                page = 1,
+                limit = 10
+            } = filters;
 
             const where = {
                 companyId: companyId,
                 ...(stage && { stage }),
                 ...(salespersonId && { salespersonId }),
+                ...(customerId && { customerId }),
+                ...(startDate && endDate && {
+                    closingDate: {
+                        gte: new Date(startDate),
+                        lte: new Date(endDate),
+                    },
+                }),
+                ...((minValue || maxValue) && {
+                    value: {
+                        ...(minValue && { gte: parseFloat(minValue) }),
+                        ...(maxValue && { lte: parseFloat(maxValue) }),
+                    },
+                }),
                 ...(search && {
                     OR: [
                         { title: { contains: search, mode: 'insensitive' } },
@@ -53,28 +77,42 @@ class DealService {
                 }),
             };
 
-            const deals = await prisma.deal.findMany({
-                where,
-                include: {
-                    salesperson: {
-                        select: {
-                            id: true,
-                            fullName: true,
-                            email: true,
+            const [deals, total] = await Promise.all([
+                prisma.deal.findMany({
+                    where,
+                    include: {
+                        salesperson: {
+                            select: {
+                                id: true,
+                                fullName: true,
+                                email: true,
+                            },
+                        },
+                        customer: {
+                            select: {
+                                id: true,
+                                name: true,
+                            },
                         },
                     },
-                    customer: {
-                        select: {
-                            id: true,
-                            name: true,
-                        },
+                    orderBy: {
+                        updatedAt: 'desc',
                     },
+                    skip: (page - 1) * limit,
+                    take: limit,
+                }),
+                prisma.deal.count({ where }),
+            ]);
+
+            return {
+                deals,
+                pagination: {
+                    total,
+                    page,
+                    limit,
+                    totalPages: Math.ceil(total / limit),
                 },
-                orderBy: {
-                    updatedAt: 'desc',
-                },
-            });
-            return deals;
+            };
         } catch (error) {
             throw new Error(`Error fetching deals: ${error.message}`);
         }

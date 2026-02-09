@@ -17,6 +17,13 @@ const getAllDeals = async (req, res) => {
             search: req.query.search,
             stage: req.query.stage,
             salespersonId: req.query.salespersonId,
+            customerId: req.query.customerId,
+            startDate: req.query.startDate,
+            endDate: req.query.endDate,
+            minValue: req.query.minValue,
+            maxValue: req.query.maxValue,
+            page: parseInt(req.query.page) || 1,
+            limit: parseInt(req.query.limit) || 10,
         };
         const deals = await dealService.getAllDeals(companyId, filters);
         res.status(200).json({ success: true, data: deals });
