@@ -6,7 +6,11 @@ const path = require("path");
 
 const app = express();
 
+// Parse CLIENT_URL - supports comma-separated list or single URL
 const CLIENT_URL = process.env.CLIENT_URL || "*";
+const allowedOrigins = CLIENT_URL === "*"
+  ? "*"
+  : CLIENT_URL.split(",").map(url => url.trim());
 
 // Trust proxy (for load balancers / HTTPS behind proxy)
 app.set("trust proxy", 1);
@@ -15,7 +19,20 @@ app.set("trust proxy", 1);
 app.use(helmet());
 app.use(
   cors({
-    origin: CLIENT_URL,
+    origin: (origin, callback) => {
+      // Allow requests with no origin (like mobile apps, Postman, or curl)
+      if (!origin) return callback(null, true);
+
+      // Allow all origins if CLIENT_URL is "*"
+      if (allowedOrigins === "*") return callback(null, true);
+
+      // Check if origin is in allowed list
+      if (allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        callback(new Error(`Origin ${origin} not allowed by CORS`));
+      }
+    },
     credentials: true,
   })
 );
