@@ -3,7 +3,8 @@ const employeeService = require('./employee.service');
 const getEmployees = async (req, res) => {
     try {
         const companyId = req.user.companyId;
-        const employees = await employeeService.getAllEmployees(companyId);
+        const { department, role, search } = req.query;
+        const employees = await employeeService.getAllEmployees(companyId, { department, role, search });
         res.status(200).json({ success: true, data: employees });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
