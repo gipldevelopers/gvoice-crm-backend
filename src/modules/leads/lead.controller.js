@@ -171,6 +171,61 @@ class LeadController {
             });
         }
     }
+
+    // Assign a lead
+    async assignLead(req, res) {
+        try {
+            const { id } = req.params;
+            const { salespersonId } = req.body;
+            const companyId = req.user.companyId;
+
+            const updatedLead = await leadService.assignLead(id, salespersonId, companyId);
+
+            const message = salespersonId ? 'Lead assigned successfully' : 'Lead unassigned successfully';
+
+            return res.status(200).json({
+                success: true,
+                message: message,
+                data: updatedLead,
+            });
+        } catch (error) {
+            console.error('Error in assignLead:', error);
+            return res.status(error.message === 'Lead not found' ? 404 : 500).json({
+                success: false,
+                message: error.message || 'Error assigning lead',
+            });
+        }
+    }
+
+    // Update lead status
+    async updateStatus(req, res) {
+        try {
+            const { id } = req.params;
+            const { status } = req.body;
+            const companyId = req.user.companyId;
+
+            if (!status) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Status is required',
+                });
+            }
+
+            const updatedLead = await leadService.updateStatus(id, status, companyId);
+
+            return res.status(200).json({
+                success: true,
+                message: 'Lead status updated successfully',
+                data: updatedLead,
+            });
+        } catch (error) {
+            console.error('Error in updateStatus:', error);
+            return res.status(error.message === 'Lead not found' ? 404 : 500).json({
+                success: false,
+                message: error.message || 'Error updating lead status',
+            });
+        }
+    }
 }
 
 module.exports = new LeadController();

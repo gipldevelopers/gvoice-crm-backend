@@ -26,4 +26,10 @@ router.put('/:id', leadController.updateLead);
 // Delete a lead
 router.delete('/:id', leadController.deleteLead);
 
+// Assign a lead
+router.patch('/:id/assign', leadController.assignLead);
+
+// Update lead status
+router.patch('/:id/status', leadController.updateStatus);
+
 module.exports = router;
