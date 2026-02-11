@@ -113,7 +113,7 @@ class CustomerService {
     }
 
     // Convert Lead to Customer
-    async convertLeadToCustomer(leadId, companyId) {
+    async convertLeadToCustomer(leadId, companyId, actorUserId = null) {
         try {
             const lead = await prisma.lead.findFirst({
                 where: { id: leadId, companyId },
@@ -127,7 +127,24 @@ class CustomerService {
             });
 
             if (existingCustomer) {
-                throw new Error('This lead is already converted to a customer');
+                await prisma.leadAuditLog.create({
+                    data: {
+                        leadId: lead.id,
+                        companyId,
+                        actorUserId,
+                        action: 'CONVERT_TO_CUSTOMER',
+                        message: 'Lead already converted to customer',
+                        changes: {
+                            customerId: existingCustomer.id,
+                            alreadyConverted: true,
+                        },
+                    },
+                });
+
+                return {
+                    customer: existingCustomer,
+                    alreadyConverted: true,
+                };
             }
 
             // Create customer from lead data
@@ -161,7 +178,24 @@ class CustomerService {
                 return customer;
             });
 
-            return result;
+            await prisma.leadAuditLog.create({
+                data: {
+                    leadId: lead.id,
+                    companyId,
+                    actorUserId,
+                    action: 'CONVERT_TO_CUSTOMER',
+                    message: 'Lead converted to customer',
+                    changes: {
+                        customerId: result.id,
+                        alreadyConverted: false,
+                    },
+                },
+            });
+
+            return {
+                customer: result,
+                alreadyConverted: false,
+            };
         } catch (error) {
             console.error(error);
             throw new Error(`Error converting lead to customer: ${error.message}`);

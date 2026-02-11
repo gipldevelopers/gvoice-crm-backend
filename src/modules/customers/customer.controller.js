@@ -134,16 +134,20 @@ class CustomerController {
                 return res.status(400).json({ success: false, message: 'leadId is required' });
             }
 
-            const customer = await customerService.convertLeadToCustomer(leadId, companyId);
+            const result = await customerService.convertLeadToCustomer(leadId, companyId, req.user.id);
 
-            return res.status(201).json({
+            return res.status(result.alreadyConverted ? 200 : 201).json({
                 success: true,
-                message: 'Lead converted to customer successfully',
-                data: customer,
+                message: result.alreadyConverted
+                    ? 'Lead already converted to customer'
+                    : 'Lead converted to customer successfully',
+                data: result.customer,
+                alreadyConverted: result.alreadyConverted,
             });
         } catch (error) {
             console.error('Error in convertLead:', error);
-            return res.status(500).json({
+            const statusCode = error.message?.toLowerCase().includes('not found') ? 404 : 500;
+            return res.status(statusCode).json({
                 success: false,
                 message: error.message,
             });
