@@ -1,6 +1,7 @@
 const jwt = require('jsonwebtoken');
+const prisma = require('../database/prisma');
 
-const authenticate = (req, res, next) => {
+const authenticate = async (req, res, next) => {
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
         return res.status(401).json({ success: false, message: 'Unauthorized: No token provided' });
@@ -10,7 +11,22 @@ const authenticate = (req, res, next) => {
 
     try {
         const decoded = jwt.verify(token, process.env.JWT_SECRET);
-        req.user = decoded; // Contains id, email, role, companyId
+
+        // Verify user exists in DB
+        const user = await prisma.user.findUnique({
+            where: { id: decoded.id },
+            select: { id: true, role: true, companyId: true }
+        });
+
+        if (!user) {
+            return res.status(401).json({ success: false, message: 'User not found' });
+        }
+
+        req.user = {
+            id: user.id,
+            role: user.role,
+            companyId: user.companyId
+        };
         next();
     } catch (error) {
         return res.status(401).json({ success: false, message: 'Unauthorized: Invalid token' });
