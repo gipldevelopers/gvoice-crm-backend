@@ -38,6 +38,7 @@ model User {
   company    Company  @relation(fields: [companyId], references: [id])
   files      File[]
   leads      Lead[]   @relation("AssignedLeads")
+  leadAuditLogs LeadAuditLog[]
   deals      Deal[]   @relation("AssignedDeals")
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
@@ -74,10 +75,28 @@ model Lead {
   companyId      String
   company        Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
   customer       Customer?
+  auditLogs      LeadAuditLog[]
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
   @@map("leads")
+}
+
+model LeadAuditLog {
+  id            String   @id @default(cuid())
+  leadId         String
+  lead           Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  companyId      String
+  actorUserId    String?
+  actorUser      User?    @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+  action         String   // CREATE, UPDATE, STATUS_CHANGE, ASSIGN_CHANGE, CLAIM_REQUEST, CONVERT_TO_CUSTOMER, DELETE
+  changes        Json?
+  message        String?
+  createdAt      DateTime @default(now())
+
+  @@index([leadId, createdAt])
+  @@index([companyId, createdAt])
+  @@map("lead_audit_logs")
 }
 
 model Customer {
