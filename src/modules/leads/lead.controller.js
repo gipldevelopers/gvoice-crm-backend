@@ -14,7 +14,7 @@ class LeadController {
                 });
             }
 
-            const lead = await leadService.createLead(leadData, companyId);
+            const lead = await leadService.createLead(leadData, companyId, req.user.id, req.user.id);
 
             return res.status(201).json({
                 success: true,
@@ -87,7 +87,7 @@ class LeadController {
             const leadData = req.body;
             const companyId = req.user.companyId;
 
-            const updatedLead = await leadService.updateLead(id, leadData, companyId);
+            const updatedLead = await leadService.updateLead(id, leadData, companyId, req.user.id);
 
             return res.status(200).json({
                 success: true,
@@ -109,7 +109,7 @@ class LeadController {
             const { id } = req.params;
             const companyId = req.user.companyId;
 
-            const result = await leadService.deleteLead(id, companyId);
+            const result = await leadService.deleteLead(id, companyId, req.user.id);
 
             return res.status(200).json({
                 success: true,
@@ -175,11 +175,18 @@ class LeadController {
     // Assign a lead
     async assignLead(req, res) {
         try {
+            if (req.user.role !== 'admin') {
+                return res.status(403).json({
+                    success: false,
+                    message: 'Only admin can change lead assignment',
+                });
+            }
+
             const { id } = req.params;
             const { salespersonId } = req.body;
             const companyId = req.user.companyId;
 
-            const updatedLead = await leadService.assignLead(id, salespersonId, companyId);
+            const updatedLead = await leadService.assignLead(id, salespersonId, companyId, req.user.id);
 
             const message = salespersonId ? 'Lead assigned successfully' : 'Lead unassigned successfully';
 
@@ -193,6 +200,33 @@ class LeadController {
             return res.status(error.message === 'Lead not found' ? 404 : 500).json({
                 success: false,
                 message: error.message || 'Error assigning lead',
+            });
+        }
+    }
+
+    // Request lead claim
+    async requestClaim(req, res) {
+        try {
+            const { id } = req.params;
+            const companyId = req.user.companyId;
+            const requesterId = req.user.id;
+
+            const result = await leadService.requestClaim(id, requesterId, companyId);
+
+            return res.status(200).json({
+                success: true,
+                message: `Claim request sent to ${result.requestedTo.fullName}`,
+                data: result,
+            });
+        } catch (error) {
+            console.error('Error in requestClaim:', error);
+
+            const lower = (error.message || '').toLowerCase();
+            const statusCode = lower.includes('not found') ? 404 : lower.includes('only when 3 days or less') || lower.includes('already') || lower.includes('no lead owner') ? 400 : 500;
+
+            return res.status(statusCode).json({
+                success: false,
+                message: error.message || 'Error requesting lead claim',
             });
         }
     }
@@ -211,7 +245,7 @@ class LeadController {
                 });
             }
 
-            const updatedLead = await leadService.updateStatus(id, status, companyId);
+            const updatedLead = await leadService.updateStatus(id, status, companyId, req.user.id);
 
             return res.status(200).json({
                 success: true,

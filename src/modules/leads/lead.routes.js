@@ -29,6 +29,9 @@ router.delete('/:id', leadController.deleteLead);
 // Assign a lead
 router.patch('/:id/assign', leadController.assignLead);
 
+// Request lead claim (creates approval task for lead owner/admin)
+router.patch('/:id/claim-request', leadController.requestClaim);
+
 // Update lead status
 router.patch('/:id/status', leadController.updateStatus);
 
