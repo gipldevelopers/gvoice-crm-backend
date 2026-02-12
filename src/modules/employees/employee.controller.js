@@ -3,8 +3,8 @@ const employeeService = require('./employee.service');
 const getEmployees = async (req, res) => {
     try {
         const companyId = req.user.companyId;
-        const { department, role, search } = req.query;
-        const employees = await employeeService.getAllEmployees(companyId, { department, role, search });
+        const { department, role, search, managerId } = req.query;
+        const employees = await employeeService.getAllEmployees(companyId, { department, role, search, managerId });
         res.status(200).json({ success: true, data: employees });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
@@ -83,11 +83,34 @@ const getDepartments = async (req, res) => {
     }
 };
 
+const getHierarchy = async (req, res) => {
+    try {
+        const companyId = req.user.companyId;
+        const hierarchy = await employeeService.getHierarchy(companyId);
+        res.status(200).json({ success: true, data: hierarchy });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+const getPotentialManagers = async (req, res) => {
+    try {
+        const companyId = req.user.companyId;
+        const { role, department, excludeId } = req.query;
+        const managers = await employeeService.getPotentialManagers(companyId, { role, department, excludeId });
+        res.status(200).json({ success: true, data: managers });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 module.exports = {
     getEmployees,
     getEmployee,
     createEmployee,
     updateEmployee,
     deleteEmployee,
-    getDepartments
+    getDepartments,
+    getHierarchy,
+    getPotentialManagers
 };

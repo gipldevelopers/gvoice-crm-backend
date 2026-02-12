@@ -1,6 +1,7 @@
 const prisma = require('../../database/prisma');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const { normalizeRole } = require('../../helpers/employeeHierarchy');
 
 const login = async (identifier, password) => {
     const user = await prisma.user.findFirst({
@@ -26,7 +27,7 @@ const login = async (identifier, password) => {
         {
             id: user.id,
             email: user.email,
-            role: user.role,
+            role: normalizeRole(user.role),
             companyId: user.companyId
         },
         process.env.JWT_SECRET,
@@ -45,7 +46,7 @@ const login = async (identifier, password) => {
             email: user.email,
             fullName: user.fullName,
             username: user.username,
-            role: user.role,
+            role: normalizeRole(user.role),
             company: user.company
         },
         token
@@ -64,7 +65,7 @@ const getUserById = async (id) => {
 
     // Don't return sensitive data
     const { password, token, ...safeUser } = user;
-    return safeUser;
+    return { ...safeUser, role: normalizeRole(safeUser.role) };
 };
 
 module.exports = {

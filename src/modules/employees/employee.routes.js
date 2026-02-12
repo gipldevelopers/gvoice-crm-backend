@@ -8,6 +8,8 @@ router.use(authenticate);
 
 router.get('/', employeeController.getEmployees);
 router.get('/departments', employeeController.getDepartments);
+router.get('/hierarchy', employeeController.getHierarchy);
+router.get('/managers', employeeController.getPotentialManagers);
 router.get('/:id', employeeController.getEmployee);
 router.post('/', employeeController.createEmployee);
 router.put('/:id', employeeController.updateEmployee);
