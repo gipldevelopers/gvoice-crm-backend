@@ -32,7 +32,11 @@ model User {
   phone      String?
   password   String
   department String?
-  role       String   @default("user")
+  teamName   String?
+  role       String   @default("employee")
+  reportsToId String?
+  reportsTo  User?    @relation("UserHierarchy", fields: [reportsToId], references: [id], onDelete: SetNull)
+  directReports User[] @relation("UserHierarchy")
   token      String?
   companyId  String
   company    Company  @relation(fields: [companyId], references: [id])
@@ -43,6 +47,10 @@ model User {
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
+  @@index([companyId])
+  @@index([companyId, department])
+  @@index([companyId, role])
+  @@index([reportsToId])
   @@map("users")
 }
 
