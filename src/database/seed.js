@@ -40,7 +40,7 @@ async function main() {
         phone: '1234567890',
         password: hashedPassword,
         department: 'Management',
-        role: 'admin',
+        role: 'company_admin',
         companyId: company.id
       },
     });
@@ -51,7 +51,7 @@ async function main() {
       where: { email: adminEmail },
       data: {
         companyId: company.id,
-        role: 'admin'
+        role: 'company_admin'
       }
     });
     console.log(`Admin user ${adminEmail} updated.`);
