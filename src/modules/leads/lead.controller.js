@@ -1,4 +1,5 @@
 const leadService = require('./lead.service');
+const { isCompanyAdminRole } = require('../../helpers/employeeHierarchy');
 
 class LeadController {
     // Create a new lead
@@ -175,10 +176,10 @@ class LeadController {
     // Assign a lead
     async assignLead(req, res) {
         try {
-            if (req.user.role !== 'admin') {
+            if (!isCompanyAdminRole(req.user.role)) {
                 return res.status(403).json({
                     success: false,
-                    message: 'Only admin can change lead assignment',
+                    message: 'Only Company Admin can change lead assignment',
                 });
             }
 

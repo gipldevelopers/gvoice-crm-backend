@@ -1,4 +1,5 @@
 const prisma = require('../../database/prisma');
+const { EMPLOYEE_ROLES } = require('../../helpers/employeeHierarchy');
 
 const LEAD_TIMER_DAYS = 15;
 const MILLISECONDS_IN_DAY = 24 * 60 * 60 * 1000;
@@ -570,7 +571,7 @@ class LeadService {
                 targetUser = await prisma.user.findFirst({
                     where: {
                         companyId: companyId,
-                        role: 'admin',
+                        role: { in: ['admin', EMPLOYEE_ROLES.COMPANY_ADMIN] },
                         NOT: { id: requesterId },
                     },
                     select: {
@@ -582,7 +583,7 @@ class LeadService {
             }
 
             if (!targetUser) {
-                throw new Error('No lead owner/admin found to receive claim request');
+                throw new Error('No lead owner/company admin found to receive claim request');
             }
 
             const existingRequest = await prisma.task.findFirst({
