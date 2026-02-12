@@ -1,5 +1,6 @@
 const jwt = require('jsonwebtoken');
 const prisma = require('../database/prisma');
+const { normalizeRole } = require('../helpers/employeeHierarchy');
 
 const authenticate = async (req, res, next) => {
     const authHeader = req.headers.authorization;
@@ -24,7 +25,8 @@ const authenticate = async (req, res, next) => {
 
         req.user = {
             id: user.id,
-            role: user.role,
+            role: normalizeRole(user.role),
+            rawRole: user.role,
             companyId: user.companyId
         };
         next();
