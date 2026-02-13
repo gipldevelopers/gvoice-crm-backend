@@ -35,6 +35,7 @@ router.patch('/:id/assign', leadController.assignLead);
 // Request lead claim (creates approval task for lead owner/admin)
 router.patch('/:id/claim-request', leadController.requestClaim);
 router.patch('/claim-requests/:taskId/decision', leadController.decideClaimRequest);
+router.patch('/:id/dev-force-claim-open', leadController.forceClaimOpenForTesting);
 
 // Update lead status
 router.patch('/:id/status', leadController.updateStatus);

@@ -1,9 +1,10 @@
 const prisma = require('../../database/prisma');
-const { EMPLOYEE_ROLES, normalizeRole } = require('../../helpers/employeeHierarchy');
+const { EMPLOYEE_ROLES, normalizeRole, isCompanyAdminRole } = require('../../helpers/employeeHierarchy');
 
 const LEAD_TIMER_DAYS = 15;
 const MILLISECONDS_IN_DAY = 24 * 60 * 60 * 1000;
 const CLAIM_APPROVAL_WINDOW_HOURS = 12;
+const CLAIM_TIMER_OVERRIDE_ACTION = 'CLAIM_WINDOW_OVERRIDE';
 const LEAD_WIN_PROBABILITY = {
     New: 10,
     Contacted: 25,
@@ -27,6 +28,10 @@ class LeadService {
         if (task?.dueDate) return new Date(task.dueDate);
         const createdAt = new Date(task?.createdAt || Date.now());
         return new Date(createdAt.getTime() + (CLAIM_APPROVAL_WINDOW_HOURS * 60 * 60 * 1000));
+    }
+
+    isForceClaimOpenChange(changes) {
+        return !!(changes && typeof changes === 'object' && changes.forceClaimOpen);
     }
 
     async createAuditLog({ leadId, companyId, actorUserId = null, action, message = null, changes = null }) {
@@ -90,11 +95,13 @@ class LeadService {
             where: {
                 companyId,
                 leadId: { in: leadIds },
-                action: { in: ['ASSIGN_CHANGE', 'CLAIM_APPROVED'] },
+                action: { in: ['ASSIGN_CHANGE', 'CLAIM_APPROVED', CLAIM_TIMER_OVERRIDE_ACTION] },
             },
             select: {
                 leadId: true,
                 createdAt: true,
+                action: true,
+                changes: true,
             },
             orderBy: {
                 createdAt: 'desc',
@@ -104,7 +111,14 @@ class LeadService {
         const timerStartMap = new Map();
         ownershipLogs.forEach((log) => {
             if (!timerStartMap.has(log.leadId)) {
-                timerStartMap.set(log.leadId, log.createdAt);
+                if (
+                    log.action === CLAIM_TIMER_OVERRIDE_ACTION &&
+                    this.isForceClaimOpenChange(log.changes)
+                ) {
+                    timerStartMap.set(log.leadId, new Date(Date.now() - (LEAD_TIMER_DAYS * MILLISECONDS_IN_DAY)));
+                } else {
+                    timerStartMap.set(log.leadId, log.createdAt);
+                }
             }
         });
 
@@ -116,13 +130,74 @@ class LeadService {
             where: {
                 companyId,
                 leadId,
-                action: { in: ['ASSIGN_CHANGE', 'CLAIM_APPROVED'] },
+                action: { in: ['ASSIGN_CHANGE', 'CLAIM_APPROVED', CLAIM_TIMER_OVERRIDE_ACTION] },
             },
-            select: { createdAt: true },
+            select: { createdAt: true, action: true, changes: true },
             orderBy: { createdAt: 'desc' },
         });
 
+        if (
+            latestOwnershipLog &&
+            latestOwnershipLog.action === CLAIM_TIMER_OVERRIDE_ACTION &&
+            this.isForceClaimOpenChange(latestOwnershipLog.changes)
+        ) {
+            return new Date(Date.now() - (LEAD_TIMER_DAYS * MILLISECONDS_IN_DAY));
+        }
+
         return latestOwnershipLog?.createdAt || fallbackDate;
+    }
+
+    async getForcedOverdueLeadSet(companyId, leadIds = []) {
+        if (!leadIds.length) return new Set();
+
+        const timerLogs = await prisma.leadAuditLog.findMany({
+            where: {
+                companyId,
+                leadId: { in: leadIds },
+                action: { in: ['ASSIGN_CHANGE', 'CLAIM_APPROVED', CLAIM_TIMER_OVERRIDE_ACTION] },
+            },
+            select: {
+                leadId: true,
+                action: true,
+                changes: true,
+                createdAt: true,
+            },
+            orderBy: { createdAt: 'desc' },
+        });
+
+        const latestByLead = new Map();
+        timerLogs.forEach((log) => {
+            if (!latestByLead.has(log.leadId)) {
+                latestByLead.set(log.leadId, log);
+            }
+        });
+
+        const forcedOverdueLeadSet = new Set();
+        latestByLead.forEach((log, leadId) => {
+            if (log.action === CLAIM_TIMER_OVERRIDE_ACTION && this.isForceClaimOpenChange(log.changes)) {
+                forcedOverdueLeadSet.add(leadId);
+            }
+        });
+
+        return forcedOverdueLeadSet;
+    }
+
+    async isLeadForcedOverdue(companyId, leadId) {
+        const latestTimerLog = await prisma.leadAuditLog.findFirst({
+            where: {
+                companyId,
+                leadId,
+                action: { in: ['ASSIGN_CHANGE', 'CLAIM_APPROVED', CLAIM_TIMER_OVERRIDE_ACTION] },
+            },
+            select: { action: true, changes: true, createdAt: true },
+            orderBy: { createdAt: 'desc' },
+        });
+
+        return !!(
+            latestTimerLog &&
+            latestTimerLog.action === CLAIM_TIMER_OVERRIDE_ACTION &&
+            this.isForceClaimOpenChange(latestTimerLog.changes)
+        );
     }
 
     async expirePendingClaimTasks(companyId, leadIds = []) {
@@ -326,7 +401,10 @@ class LeadService {
 
             const leadIds = leads.map((lead) => lead.id);
             await this.expirePendingClaimTasks(companyId, leadIds);
-            const timerStartMap = await this.getLeadTimerStartMap(companyId, leadIds);
+            const [timerStartMap, forcedOverdueLeadSet] = await Promise.all([
+                this.getLeadTimerStartMap(companyId, leadIds),
+                this.getForcedOverdueLeadSet(companyId, leadIds),
+            ]);
             const pendingClaimTasks = await prisma.task.findMany({
                 where: {
                     companyId,
@@ -371,6 +449,7 @@ class LeadService {
 
             const enrichedLeads = leads.map((lead) => ({
                 ...lead,
+                leadTimerForcedOverdue: forcedOverdueLeadSet.has(lead.id),
                 claimLockActive: openClaimTaskByLead.has(lead.id),
                 claimLockExpiresAt: openClaimTaskByLead.has(lead.id)
                     ? this.extractClaimDeadlineFromTask(openClaimTaskByLead.get(lead.id))
@@ -443,10 +522,14 @@ class LeadService {
                 throw new Error('Lead not found');
             }
 
-            const timerStartAt = await this.getLeadTimerStartAt(companyId, lead.id, lead.createdAt);
+            const [timerStartAt, isForcedOverdue] = await Promise.all([
+                this.getLeadTimerStartAt(companyId, lead.id, lead.createdAt),
+                this.isLeadForcedOverdue(companyId, lead.id),
+            ]);
             return this.attachLeadTimerData({
                 ...lead,
                 leadTimerStartAt: timerStartAt,
+                leadTimerForcedOverdue: isForcedOverdue,
             });
         } catch (error) {
             throw new Error(`Error fetching lead: ${error.message}`);
@@ -723,7 +806,7 @@ class LeadService {
     }
 
     // Update lead status
-    async updateStatus(leadId, status, companyId, actorUserId = null) {
+    async updateStatus(leadId, status, companyId, actorUserId = null, actorRole = null) {
         try {
             // First verify the lead belongs to the company
             const existingLead = await prisma.lead.findFirst({
@@ -735,6 +818,11 @@ class LeadService {
 
             if (!existingLead) {
                 throw new Error('Lead not found');
+            }
+
+            const canUpdateStatus = isCompanyAdminRole(actorRole) || existingLead.salespersonId === actorUserId;
+            if (!canUpdateStatus) {
+                throw new Error('You can update status only for your own leads');
             }
 
             const updatedLead = await prisma.lead.update({
@@ -938,6 +1026,33 @@ class LeadService {
         }
     }
 
+    async forceClaimOpenForTesting(leadId, companyId, actorUserId) {
+        const lead = await prisma.lead.findFirst({
+            where: { id: leadId, companyId },
+            select: { id: true, name: true },
+        });
+
+        if (!lead) {
+            throw new Error('Lead not found');
+        }
+
+        await this.expirePendingClaimTasks(companyId, [lead.id]);
+
+        await this.createAuditLog({
+            leadId: lead.id,
+            companyId,
+            actorUserId,
+            action: CLAIM_TIMER_OVERRIDE_ACTION,
+            message: 'Lead claim timer manually opened for development testing',
+            changes: {
+                forceClaimOpen: true,
+                leadTimerTotalDays: LEAD_TIMER_DAYS,
+            },
+        });
+
+        return { leadId: lead.id, message: 'Lead claim timer forced to 0D for testing' };
+    }
+
     async getClaimActivities(companyId, userId) {
         await this.expirePendingClaimTasks(companyId);
 
@@ -968,7 +1083,7 @@ class LeadService {
             .map((task) => this.extractRequesterIdFromNotes(task.notes))
             .filter(Boolean);
 
-        const [leads, requesters, timerStartMap] = await Promise.all([
+        const [leads, requesters, timerStartMap, forcedOverdueLeadSet] = await Promise.all([
             prisma.lead.findMany({
                 where: { companyId, id: { in: leadIds } },
                 select: {
@@ -984,6 +1099,7 @@ class LeadService {
                 select: { id: true, fullName: true, email: true, role: true }
             }),
             this.getLeadTimerStartMap(companyId, leadIds),
+            this.getForcedOverdueLeadSet(companyId, leadIds),
         ]);
 
         const leadMap = new Map(leads.map((lead) => [lead.id, lead]));
@@ -1006,6 +1122,7 @@ class LeadService {
                     ? this.attachLeadTimerData({
                         ...lead,
                         leadTimerStartAt: timerStartMap.get(lead.id) || lead.createdAt,
+                        leadTimerForcedOverdue: forcedOverdueLeadSet.has(lead.id),
                     })
                     : null,
                 requester: requester || null

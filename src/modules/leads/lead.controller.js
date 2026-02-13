@@ -291,6 +291,42 @@ class LeadController {
         }
     }
 
+    async forceClaimOpenForTesting(req, res) {
+        try {
+            if (process.env.NODE_ENV !== 'development') {
+                return res.status(403).json({
+                    success: false,
+                    message: 'This action is available only in development mode',
+                });
+            }
+
+            if (!isCompanyAdminRole(req.user.role)) {
+                return res.status(403).json({
+                    success: false,
+                    message: 'Only Company Admin can use this action',
+                });
+            }
+
+            const { id } = req.params;
+            const companyId = req.user.companyId;
+            const actorUserId = req.user.id;
+
+            const result = await leadService.forceClaimOpenForTesting(id, companyId, actorUserId);
+
+            return res.status(200).json({
+                success: true,
+                message: result.message,
+                data: result,
+            });
+        } catch (error) {
+            console.error('Error in forceClaimOpenForTesting:', error);
+            return res.status(error.message === 'Lead not found' ? 404 : 500).json({
+                success: false,
+                message: error.message || 'Error forcing lead claim open',
+            });
+        }
+    }
+
     // Update lead status
     async updateStatus(req, res) {
         try {
@@ -305,7 +341,7 @@ class LeadController {
                 });
             }
 
-            const updatedLead = await leadService.updateStatus(id, status, companyId, req.user.id);
+            const updatedLead = await leadService.updateStatus(id, status, companyId, req.user.id, req.user.role);
 
             return res.status(200).json({
                 success: true,
@@ -314,7 +350,9 @@ class LeadController {
             });
         } catch (error) {
             console.error('Error in updateStatus:', error);
-            return res.status(error.message === 'Lead not found' ? 404 : 500).json({
+            const lower = (error.message || '').toLowerCase();
+            const statusCode = error.message === 'Lead not found' ? 404 : lower.includes('only for your own leads') ? 403 : 500;
+            return res.status(statusCode).json({
                 success: false,
                 message: error.message || 'Error updating lead status',
             });
