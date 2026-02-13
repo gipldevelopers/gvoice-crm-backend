@@ -42,7 +42,7 @@ class LeadController {
                 salespersonId: req.query.salespersonId,
             };
 
-            const leads = await leadService.getAllLeads(companyId, filters);
+            const leads = await leadService.getAllLeads(companyId, filters, req.user.id);
 
             return res.status(200).json({
                 success: true,
@@ -205,6 +205,28 @@ class LeadController {
         }
     }
 
+    // Get claim request activities for current user
+    async getClaimActivities(req, res) {
+        try {
+            const companyId = req.user.companyId;
+            const userId = req.user.id;
+            const activities = await leadService.getClaimActivities(companyId, userId);
+
+            return res.status(200).json({
+                success: true,
+                message: 'Claim activities fetched successfully',
+                data: activities,
+                count: activities.length,
+            });
+        } catch (error) {
+            console.error('Error in getClaimActivities:', error);
+            return res.status(500).json({
+                success: false,
+                message: error.message || 'Error fetching claim activities',
+            });
+        }
+    }
+
     // Request lead claim
     async requestClaim(req, res) {
         try {
@@ -223,11 +245,48 @@ class LeadController {
             console.error('Error in requestClaim:', error);
 
             const lower = (error.message || '').toLowerCase();
-            const statusCode = lower.includes('not found') ? 404 : lower.includes('only when 3 days or less') || lower.includes('already') || lower.includes('no lead owner') ? 400 : 500;
+            const statusCode = lower.includes('not found') ? 404 : lower.includes('only after 15 days') || lower.includes('already') || lower.includes('no lead owner') ? 400 : 500;
 
             return res.status(statusCode).json({
                 success: false,
                 message: error.message || 'Error requesting lead claim',
+            });
+        }
+    }
+
+    async decideClaimRequest(req, res) {
+        try {
+            const { taskId } = req.params;
+            const { decision } = req.body;
+            const companyId = req.user.companyId;
+            const actorUserId = req.user.id;
+
+            if (!decision || !['approve', 'reject'].includes(String(decision).toLowerCase())) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Decision is required and must be approve or reject',
+                });
+            }
+
+            const result = await leadService.decideClaimRequest({
+                taskId,
+                decision: String(decision).toLowerCase(),
+                companyId,
+                actorUserId,
+            });
+
+            return res.status(200).json({
+                success: true,
+                message: decision === 'approve' ? 'Claim request approved' : 'Claim request rejected',
+                data: result,
+            });
+        } catch (error) {
+            console.error('Error in decideClaimRequest:', error);
+            const lower = (error.message || '').toLowerCase();
+            const statusCode = lower.includes('not found') ? 404 : lower.includes('not authorized') || lower.includes('already processed') || lower.includes('invalid') || lower.includes('expired') ? 400 : 500;
+            return res.status(statusCode).json({
+                success: false,
+                message: error.message || 'Error deciding claim request',
             });
         }
     }

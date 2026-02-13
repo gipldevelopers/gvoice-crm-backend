@@ -11,6 +11,9 @@ router.post('/', leadController.createLead);
 // Get all leads with optional filters
 router.get('/', leadController.getAllLeads);
 
+// Get claim request activities for current user
+router.get('/claim-activities', leadController.getClaimActivities);
+
 // Get lead statistics
 router.get('/stats', leadController.getLeadStats);
 
@@ -31,6 +34,7 @@ router.patch('/:id/assign', leadController.assignLead);
 
 // Request lead claim (creates approval task for lead owner/admin)
 router.patch('/:id/claim-request', leadController.requestClaim);
+router.patch('/claim-requests/:taskId/decision', leadController.decideClaimRequest);
 
 // Update lead status
 router.patch('/:id/status', leadController.updateStatus);
