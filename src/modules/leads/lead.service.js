@@ -1,10 +1,25 @@
 const prisma = require('../../database/prisma');
 const { EMPLOYEE_ROLES, normalizeRole, isCompanyAdminRole } = require('../../helpers/employeeHierarchy');
+const { addEmailJob } = require('../../helpers/mailQueue');
+const {
+    leadOpenWarning1DayTemplate,
+    leadNowOpenTemplate,
+    claimRequestedToOwnerTemplate,
+    claimRequestedToApproverUrgentTemplate,
+    claimExpiredReopenedTemplate,
+    claimApprovedOwnershipTemplate,
+} = require('../../helpers/leadEmailTemplates');
 
 const LEAD_TIMER_DAYS = 15;
 const MILLISECONDS_IN_DAY = 24 * 60 * 60 * 1000;
 const CLAIM_APPROVAL_WINDOW_HOURS = 12;
+const EXTENSION_APPROVAL_WINDOW_HOURS = 12;
+const EXTENSION_MAX_DAYS = 10;
 const CLAIM_TIMER_OVERRIDE_ACTION = 'CLAIM_WINDOW_OVERRIDE';
+const LEAD_OPEN_WARNING_1D_SENT_ACTION = 'LEAD_OPEN_WARNING_1D_SENT';
+const LEAD_OPEN_FOR_EVERYONE_SENT_ACTION = 'LEAD_OPEN_FOR_EVERYONE_SENT';
+const REQUEST_TYPE_CLAIM = 'LEAD_CLAIM';
+const REQUEST_TYPE_EXTENSION = 'LEAD_EXTENSION';
 const LEAD_WIN_PROBABILITY = {
     New: 10,
     Contacted: 25,
@@ -18,10 +33,85 @@ const LEAD_WIN_PROBABILITY = {
 };
 
 class LeadService {
+    buildSafeJobId(parts = []) {
+        return parts
+            .filter((part) => part !== undefined && part !== null)
+            .map((part) => String(part).replace(/[^a-zA-Z0-9_-]/g, '_'))
+            .join('__');
+    }
+
     extractRequesterIdFromNotes(notes = '') {
         if (!notes) return null;
         const match = String(notes).match(/Requester ID:\s*([a-zA-Z0-9-]+)/i);
         return match ? match[1] : null;
+    }
+
+    extractRequestTypeFromNotes(notes = '') {
+        const value = this.extractValueFromNotesByLabel(notes, 'Request Type');
+        if (!value) return null;
+        const normalized = String(value).trim().toUpperCase();
+        if (normalized === REQUEST_TYPE_EXTENSION) return REQUEST_TYPE_EXTENSION;
+        if (normalized === REQUEST_TYPE_CLAIM) return REQUEST_TYPE_CLAIM;
+        return null;
+    }
+
+    extractRequestedExtensionDaysFromNotes(notes = '') {
+        const value = this.extractValueFromNotesByLabel(notes, 'Requested Extension Days');
+        const parsed = Number(value);
+        return Number.isFinite(parsed) ? parsed : null;
+    }
+
+    extractClosurePlanFromNotes(notes = '') {
+        return this.extractValueFromNotesByLabel(notes, 'Closure Plan') || null;
+    }
+
+    extractJustificationFromNotes(notes = '') {
+        return this.extractValueFromNotesByLabel(notes, 'Justification') || null;
+    }
+
+    extractValueFromNotesByLabel(notes = '', label = '') {
+        if (!notes || !label) return null;
+        const escapedLabel = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const regex = new RegExp(`${escapedLabel}:\\s*([^\\n\\r]+)`, 'i');
+        const match = String(notes).match(regex);
+        return match ? String(match[1]).trim() : null;
+    }
+
+    extractCurrentOwnerIdFromNotes(notes = '') {
+        const value = this.extractValueFromNotesByLabel(notes, 'Current Owner ID');
+        return value && value.toLowerCase() !== 'none' ? value : null;
+    }
+
+    extractApproverIdFromNotes(notes = '') {
+        const value = this.extractValueFromNotesByLabel(notes, 'Approver ID');
+        return value && value.toLowerCase() !== 'none' ? value : null;
+    }
+
+    async queueEmailSafe({ to, templateBuilder, templateParams, delayInMinutes = 0, jobId = null }) {
+        if (!to || !templateBuilder) return false;
+
+        const recipients = Array.isArray(to)
+            ? [...new Set(to.filter(Boolean).map((item) => String(item).trim()))]
+            : [String(to).trim()];
+        if (!recipients.length) return false;
+
+        try {
+            const template = templateBuilder(templateParams || {});
+            await addEmailJob(
+                {
+                    to: recipients.length === 1 ? recipients[0] : recipients,
+                    subject: template.subject,
+                    html: template.html,
+                    text: template.text,
+                },
+                delayInMinutes,
+                jobId ? { jobId } : {}
+            );
+            return true;
+        } catch (error) {
+            console.error(`[LeadService] Failed to queue email: ${error.message}`);
+            return false;
+        }
     }
 
     extractClaimDeadlineFromTask(task) {
@@ -60,15 +150,19 @@ class LeadService {
         return changes;
     }
 
-    getLeadTimerData(createdAt) {
+    getLeadTimerData(createdAt, extensionDays = 0, endAtOverride = null) {
         const timerStartAt = new Date(createdAt);
-        const timerEndAt = new Date(timerStartAt.getTime() + (LEAD_TIMER_DAYS * MILLISECONDS_IN_DAY));
+        const safeExtensionDays = Math.max(0, Math.min(EXTENSION_MAX_DAYS, Number(extensionDays) || 0));
+        const timerEndAt = endAtOverride
+            ? new Date(endAtOverride)
+            : new Date(timerStartAt.getTime() + ((LEAD_TIMER_DAYS + safeExtensionDays) * MILLISECONDS_IN_DAY));
         const remainingMilliseconds = timerEndAt.getTime() - Date.now();
 
         return {
             leadTimerStartAt: timerStartAt,
             leadTimerEndAt: timerEndAt,
             leadTimerTotalDays: LEAD_TIMER_DAYS,
+            leadTimerExtensionDays: safeExtensionDays,
             leadTimerDaysRemaining: Math.max(0, Math.ceil(remainingMilliseconds / MILLISECONDS_IN_DAY)),
             leadTimerExpired: remainingMilliseconds <= 0,
         };
@@ -77,9 +171,11 @@ class LeadService {
     attachLeadTimerData(lead) {
         if (!lead) return lead;
         const timerBaseDate = lead.leadTimerStartAt || lead.createdAt;
+        const extensionDays = lead.grantedExtensionDays || 0;
+        const computedEndAt = lead.leadTimerComputedEndAt || null;
         return {
             ...lead,
-            ...this.getLeadTimerData(timerBaseDate),
+            ...this.getLeadTimerData(timerBaseDate, extensionDays, computedEndAt),
             leadWinProbability: LEAD_WIN_PROBABILITY[lead.status] ?? 0,
         };
     }
@@ -123,6 +219,57 @@ class LeadService {
         });
 
         return timerStartMap;
+    }
+
+    async getLeadTimerComputationMap(companyId, leadIds = [], timerStartMap = new Map(), fallbackCreatedAtMap = new Map()) {
+        const resultMap = new Map();
+        if (!leadIds.length) return resultMap;
+
+        const extensionLogs = await prisma.leadAuditLog.findMany({
+            where: {
+                companyId,
+                leadId: { in: leadIds },
+                action: 'EXTENSION_APPROVED',
+            },
+            select: {
+                leadId: true,
+                createdAt: true,
+                changes: true,
+            },
+            orderBy: { createdAt: 'asc' },
+        });
+
+        const logsByLead = new Map();
+        extensionLogs.forEach((log) => {
+            if (!logsByLead.has(log.leadId)) logsByLead.set(log.leadId, []);
+            logsByLead.get(log.leadId).push(log);
+        });
+
+        leadIds.forEach((leadId) => {
+            const timerStartAt = new Date(timerStartMap.get(leadId) || fallbackCreatedAtMap.get(leadId) || Date.now());
+            let extensionDaysUsed = 0;
+            let computedEndAt = new Date(timerStartAt.getTime() + (LEAD_TIMER_DAYS * MILLISECONDS_IN_DAY));
+
+            const logs = logsByLead.get(leadId) || [];
+            logs.forEach((log) => {
+                if (new Date(log.createdAt) < timerStartAt) return;
+                const approvedDaysRaw = Number(log?.changes?.extensionDays || 0);
+                if (!Number.isFinite(approvedDaysRaw) || approvedDaysRaw <= 0) return;
+                if (extensionDaysUsed >= EXTENSION_MAX_DAYS) return;
+
+                const addableDays = Math.min(approvedDaysRaw, EXTENSION_MAX_DAYS - extensionDaysUsed);
+                const pivotTime = Math.max(computedEndAt.getTime(), new Date(log.createdAt).getTime());
+                computedEndAt = new Date(pivotTime + (addableDays * MILLISECONDS_IN_DAY));
+                extensionDaysUsed += addableDays;
+            });
+
+            resultMap.set(leadId, {
+                extensionDaysUsed,
+                computedEndAt,
+            });
+        });
+
+        return resultMap;
     }
 
     async getLeadTimerStartAt(companyId, leadId, fallbackDate) {
@@ -200,6 +347,274 @@ class LeadService {
         );
     }
 
+    async processLeadTimerNotifications(companyId = null) {
+        const where = {
+            salespersonId: { not: null },
+            ...(companyId ? { companyId } : {}),
+        };
+
+        const leads = await prisma.lead.findMany({
+            where,
+            select: {
+                id: true,
+                name: true,
+                companyId: true,
+                createdAt: true,
+                salespersonId: true,
+                salesperson: {
+                    select: { id: true, fullName: true, email: true },
+                },
+            },
+        });
+
+        if (!leads.length) {
+            return { checked: 0, sent: 0 };
+        }
+
+        const byCompany = leads.reduce((acc, lead) => {
+            if (!acc.has(lead.companyId)) acc.set(lead.companyId, []);
+            acc.get(lead.companyId).push(lead);
+            return acc;
+        }, new Map());
+
+        let sent = 0;
+
+        for (const [targetCompanyId, companyLeads] of byCompany.entries()) {
+            const leadIds = companyLeads.map((item) => item.id);
+            const timerStartMap = await this.getLeadTimerStartMap(targetCompanyId, leadIds);
+            const timerComputationMap = await this.getLeadTimerComputationMap(
+                targetCompanyId,
+                leadIds,
+                timerStartMap,
+                new Map(companyLeads.map((item) => [item.id, item.createdAt]))
+            );
+
+            const notificationLogs = await prisma.leadAuditLog.findMany({
+                where: {
+                    companyId: targetCompanyId,
+                    leadId: { in: leadIds },
+                    action: { in: [LEAD_OPEN_WARNING_1D_SENT_ACTION, LEAD_OPEN_FOR_EVERYONE_SENT_ACTION] },
+                },
+                select: {
+                    leadId: true,
+                    action: true,
+                    createdAt: true,
+                },
+            });
+
+            const notificationLogMap = new Map();
+            notificationLogs.forEach((log) => {
+                if (!notificationLogMap.has(log.leadId)) {
+                    notificationLogMap.set(log.leadId, []);
+                }
+                notificationLogMap.get(log.leadId).push(log);
+            });
+
+            for (const lead of companyLeads) {
+                const owner = lead.salesperson;
+                if (!owner?.email) continue;
+
+                const timerStartAt = timerStartMap.get(lead.id) || lead.createdAt;
+                const computed = timerComputationMap.get(lead.id);
+                const timerData = this.getLeadTimerData(
+                    timerStartAt,
+                    computed?.extensionDaysUsed || 0,
+                    computed?.computedEndAt || null
+                );
+                const leadLogs = notificationLogMap.get(lead.id) || [];
+
+                const warningAlreadySent = leadLogs.some(
+                    (log) => log.action === LEAD_OPEN_WARNING_1D_SENT_ACTION && new Date(log.createdAt) >= new Date(timerStartAt)
+                );
+                const openAlreadySent = leadLogs.some(
+                    (log) => log.action === LEAD_OPEN_FOR_EVERYONE_SENT_ACTION && new Date(log.createdAt) >= new Date(timerStartAt)
+                );
+
+                if (!timerData.leadTimerExpired && timerData.leadTimerDaysRemaining === 1 && !warningAlreadySent) {
+                    const queued = await this.queueEmailSafe({
+                        to: owner.email,
+                        templateBuilder: leadOpenWarning1DayTemplate,
+                        templateParams: {
+                            leadName: lead.name,
+                            ownerName: owner.fullName,
+                        },
+                        jobId: this.buildSafeJobId(['lead-warning-1d', lead.id, new Date(timerStartAt).getTime()]),
+                    });
+
+                    if (queued) {
+                        sent += 1;
+                        await this.createAuditLog({
+                            leadId: lead.id,
+                            companyId: targetCompanyId,
+                            actorUserId: null,
+                            action: LEAD_OPEN_WARNING_1D_SENT_ACTION,
+                            message: '1-day lead opening warning email queued',
+                            changes: {
+                                timerStartAt: new Date(timerStartAt).toISOString(),
+                                recipient: owner.email,
+                            },
+                        });
+                    }
+                }
+
+                if (timerData.leadTimerExpired && !openAlreadySent) {
+                    const queued = await this.queueEmailSafe({
+                        to: owner.email,
+                        templateBuilder: leadNowOpenTemplate,
+                        templateParams: {
+                            leadName: lead.name,
+                            ownerName: owner.fullName,
+                        },
+                        jobId: this.buildSafeJobId(['lead-open-15d', lead.id, new Date(timerStartAt).getTime()]),
+                    });
+
+                    if (queued) {
+                        sent += 1;
+                        await this.createAuditLog({
+                            leadId: lead.id,
+                            companyId: targetCompanyId,
+                            actorUserId: null,
+                            action: LEAD_OPEN_FOR_EVERYONE_SENT_ACTION,
+                            message: 'Lead open-for-everyone email queued',
+                            changes: {
+                                timerStartAt: new Date(timerStartAt).toISOString(),
+                                recipient: owner.email,
+                            },
+                        });
+                    }
+                }
+            }
+        }
+
+        return {
+            checked: leads.length,
+            sent,
+        };
+    }
+
+    async sendDevEmailTemplate({
+        companyId,
+        actorUserId,
+        templateType,
+        toEmail = null,
+        leadId = null,
+        leadName = null,
+        requesterName = null,
+        ownerName = null,
+        approverName = null,
+        previousOwnerName = null,
+        newOwnerName = null,
+    }) {
+        const actor = await prisma.user.findFirst({
+            where: { id: actorUserId, companyId },
+            select: { id: true, fullName: true, email: true },
+        });
+
+        if (!actor) {
+            throw new Error('User not found');
+        }
+
+        const lead = leadId
+            ? await prisma.lead.findFirst({
+                where: { id: leadId, companyId },
+                select: {
+                    id: true,
+                    name: true,
+                    salesperson: { select: { id: true, fullName: true, email: true } },
+                },
+            })
+            : null;
+
+        const resolvedLeadName = lead?.name || leadName || 'Test Lead';
+        const recipient = (toEmail || actor.email || '').trim();
+
+        if (!recipient) {
+            throw new Error('Recipient email is required');
+        }
+
+        const approvalDeadlineAt = new Date(Date.now() + (CLAIM_APPROVAL_WINDOW_HOURS * 60 * 60 * 1000));
+
+        let templateBuilder = null;
+        let templateParams = {};
+
+        switch (templateType) {
+            case 'lead_open_warning_1d':
+                templateBuilder = leadOpenWarning1DayTemplate;
+                templateParams = {
+                    leadName: resolvedLeadName,
+                    ownerName: ownerName || lead?.salesperson?.fullName || actor.fullName,
+                };
+                break;
+            case 'lead_open_15d':
+                templateBuilder = leadNowOpenTemplate;
+                templateParams = {
+                    leadName: resolvedLeadName,
+                    ownerName: ownerName || lead?.salesperson?.fullName || actor.fullName,
+                };
+                break;
+            case 'claim_requested_owner':
+                templateBuilder = claimRequestedToOwnerTemplate;
+                templateParams = {
+                    leadName: resolvedLeadName,
+                    ownerName: ownerName || lead?.salesperson?.fullName || actor.fullName,
+                    requesterName: requesterName || 'Test Requester',
+                    approvalDeadlineAt,
+                };
+                break;
+            case 'claim_requested_approver':
+                templateBuilder = claimRequestedToApproverUrgentTemplate;
+                templateParams = {
+                    leadName: resolvedLeadName,
+                    approverName: approverName || actor.fullName,
+                    requesterName: requesterName || 'Test Requester',
+                    ownerName: ownerName || lead?.salesperson?.fullName || 'Lead Owner',
+                    approvalDeadlineAt,
+                };
+                break;
+            case 'claim_expired_reopened':
+                templateBuilder = claimExpiredReopenedTemplate;
+                templateParams = {
+                    leadName: resolvedLeadName,
+                    recipientName: actor.fullName,
+                    requesterName: requesterName || 'Test Requester',
+                };
+                break;
+            case 'claim_approved_transfer':
+                templateBuilder = claimApprovedOwnershipTemplate;
+                templateParams = {
+                    leadName: resolvedLeadName,
+                    recipientName: actor.fullName,
+                    previousOwnerName: previousOwnerName || ownerName || lead?.salesperson?.fullName || 'Previous Owner',
+                    newOwnerName: newOwnerName || 'New Owner',
+                };
+                break;
+            default:
+                throw new Error('Invalid templateType');
+        }
+
+        const template = templateBuilder(templateParams);
+        const job = await addEmailJob(
+            {
+                to: recipient,
+                subject: template.subject,
+                html: template.html,
+                text: template.text,
+            },
+            0,
+            {
+                jobId: this.buildSafeJobId(['dev-email', companyId, templateType, Date.now()]),
+            }
+        );
+
+        return {
+            templateType,
+            to: recipient,
+            subject: template.subject,
+            leadName: resolvedLeadName,
+            jobId: job.id,
+        };
+    }
+
     async expirePendingClaimTasks(companyId, leadIds = []) {
         const where = {
             companyId,
@@ -225,14 +640,45 @@ class LeadService {
         const requesterIds = expiredTasks
             .map((task) => this.extractRequesterIdFromNotes(task.notes))
             .filter(Boolean);
+        const ownerIdsFromTask = expiredTasks
+            .map((task) => this.extractCurrentOwnerIdFromNotes(task.notes))
+            .filter(Boolean);
+        const approverIdsFromTask = expiredTasks
+            .map((task) => this.extractApproverIdFromNotes(task.notes))
+            .filter(Boolean);
 
         const requesters = requesterIds.length
             ? await prisma.user.findMany({
                 where: { companyId, id: { in: requesterIds } },
-                select: { id: true, fullName: true },
+                select: { id: true, fullName: true, email: true },
             })
             : [];
         const requesterMap = new Map(requesters.map((item) => [item.id, item]));
+
+        const leads = await prisma.lead.findMany({
+            where: {
+                companyId,
+                id: { in: expiredTasks.map((task) => task.linkedId).filter(Boolean) },
+            },
+            select: {
+                id: true,
+                name: true,
+                salespersonId: true,
+                salesperson: {
+                    select: { id: true, fullName: true, email: true, reportsToId: true, role: true },
+                },
+            },
+        });
+        const leadMap = new Map(leads.map((lead) => [lead.id, lead]));
+
+        const extraUserIds = [...new Set([...ownerIdsFromTask, ...approverIdsFromTask])];
+        const extraUsers = extraUserIds.length
+            ? await prisma.user.findMany({
+                where: { companyId, id: { in: extraUserIds } },
+                select: { id: true, fullName: true, email: true, reportsToId: true, role: true },
+            })
+            : [];
+        const extraUserMap = new Map(extraUsers.map((item) => [item.id, item]));
 
         await prisma.$transaction(async (tx) => {
             await Promise.all(
@@ -268,6 +714,44 @@ class LeadService {
                 })
             );
         });
+
+        await Promise.all(expiredTasks.map(async (task) => {
+            const lead = leadMap.get(task.linkedId);
+            if (!lead) return;
+
+            const requesterId = this.extractRequesterIdFromNotes(task.notes);
+            const requester = requesterId ? requesterMap.get(requesterId) : null;
+
+            const ownerId = this.extractCurrentOwnerIdFromNotes(task.notes) || lead.salespersonId || null;
+            const owner = ownerId ? (extraUserMap.get(ownerId) || lead.salesperson || null) : lead.salesperson || null;
+
+            const approverId = this.extractApproverIdFromNotes(task.notes);
+            let approver = approverId ? (extraUserMap.get(approverId) || null) : null;
+
+            if (!approver && owner?.reportsToId) {
+                const manager = extraUserMap.get(owner.reportsToId) || await prisma.user.findFirst({
+                    where: { id: owner.reportsToId, companyId },
+                    select: { id: true, fullName: true, email: true, role: true },
+                });
+                if (manager && normalizeRole(manager.role) === EMPLOYEE_ROLES.TEAM_LEADER) {
+                    approver = manager;
+                }
+            }
+
+            const recipientEmails = [...new Set([owner?.email, approver?.email].filter(Boolean))];
+            if (!recipientEmails.length) return;
+
+            await this.queueEmailSafe({
+                to: recipientEmails,
+                templateBuilder: claimExpiredReopenedTemplate,
+                templateParams: {
+                    leadName: lead.name,
+                    recipientName: '',
+                    requesterName: requester?.fullName || null,
+                },
+                jobId: this.buildSafeJobId(['claim-expired', task.id]),
+            });
+        }));
 
         return expiredTasks.length;
     }
@@ -305,6 +789,169 @@ class LeadService {
         }
 
         return null;
+    }
+
+    async resolveDepartmentHeadApproverForUser({ companyId, requesterId }) {
+        const requester = await prisma.user.findFirst({
+            where: { id: requesterId, companyId },
+            select: {
+                id: true,
+                fullName: true,
+                email: true,
+                role: true,
+                department: true,
+                reportsToId: true,
+            },
+        });
+
+        if (!requester) return null;
+
+        // Prefer an HoD from the requester's own department.
+        if (requester.department) {
+            const sameDepartmentHead = await prisma.user.findFirst({
+                where: {
+                    companyId,
+                    department: requester.department,
+                    role: { equals: EMPLOYEE_ROLES.HEAD_OF_DEPARTMENT, mode: 'insensitive' },
+                    NOT: { id: requesterId },
+                },
+                select: {
+                    id: true,
+                    fullName: true,
+                    email: true,
+                    role: true,
+                    reportsToId: true,
+                    department: true,
+                },
+                orderBy: { createdAt: 'asc' },
+            });
+
+            if (sameDepartmentHead) return sameDepartmentHead;
+        }
+
+        let cursorId = requester.reportsToId;
+        let hops = 0;
+        let fallbackAdmin = null;
+
+        while (cursorId && hops < 6) {
+            const manager = await prisma.user.findFirst({
+                where: { id: cursorId, companyId },
+                select: {
+                    id: true,
+                    fullName: true,
+                    email: true,
+                    role: true,
+                    reportsToId: true,
+                },
+            });
+            if (!manager) break;
+
+            const normalizedRole = normalizeRole(manager.role);
+            if (normalizedRole === EMPLOYEE_ROLES.HEAD_OF_DEPARTMENT && manager.id !== requesterId) {
+                return manager;
+            }
+            if (normalizedRole === EMPLOYEE_ROLES.COMPANY_ADMIN && !fallbackAdmin && manager.id !== requesterId) {
+                fallbackAdmin = manager;
+            }
+
+            cursorId = manager.reportsToId;
+            hops += 1;
+        }
+
+        if (fallbackAdmin) return fallbackAdmin;
+
+        return prisma.user.findFirst({
+            where: {
+                companyId,
+                role: { in: [EMPLOYEE_ROLES.HEAD_OF_DEPARTMENT, EMPLOYEE_ROLES.COMPANY_ADMIN, 'admin'] },
+                NOT: { id: requesterId },
+            },
+            select: {
+                id: true,
+                fullName: true,
+                email: true,
+                role: true,
+                reportsToId: true,
+            },
+            orderBy: { createdAt: 'asc' },
+        });
+    }
+
+    async expirePendingExtensionTasks(companyId, leadIds = []) {
+        const where = {
+            companyId,
+            linkedType: 'Lead',
+            status: 'Pending',
+            title: { contains: 'Extension request', mode: 'insensitive' },
+            dueDate: { lt: new Date() },
+            ...(leadIds.length ? { linkedId: { in: leadIds } } : {}),
+        };
+
+        const expiredTasks = await prisma.task.findMany({
+            where,
+            select: {
+                id: true,
+                linkedId: true,
+                notes: true,
+            },
+        });
+
+        if (!expiredTasks.length) return 0;
+
+        const requesterIds = expiredTasks
+            .map((task) => this.extractRequesterIdFromNotes(task.notes))
+            .filter(Boolean);
+
+        const leads = await prisma.lead.findMany({
+            where: { companyId, id: { in: expiredTasks.map((task) => task.linkedId).filter(Boolean) } },
+            select: { id: true, name: true },
+        });
+        const leadMap = new Map(leads.map((lead) => [lead.id, lead]));
+
+        const requesters = requesterIds.length
+            ? await prisma.user.findMany({
+                where: { companyId, id: { in: requesterIds } },
+                select: { id: true, fullName: true, email: true },
+            })
+            : [];
+        const requesterMap = new Map(requesters.map((item) => [item.id, item]));
+
+        await prisma.$transaction(async (tx) => {
+            await Promise.all(
+                expiredTasks.map((task) => tx.task.update({
+                    where: { id: task.id },
+                    data: {
+                        status: 'Completed',
+                        notes: `${task.notes || ''}\nDecision: AUTO-REJECTED (12h extension window expired) on ${new Date().toISOString()}`,
+                    },
+                }))
+            );
+
+            await Promise.all(expiredTasks.map((task) => {
+                const requesterId = this.extractRequesterIdFromNotes(task.notes);
+                const requester = requesterId ? requesterMap.get(requesterId) : null;
+                const lead = leadMap.get(task.linkedId);
+                return tx.leadAuditLog.create({
+                    data: {
+                        leadId: task.linkedId,
+                        companyId,
+                        actorUserId: null,
+                        action: 'EXTENSION_AUTO_REJECTED',
+                        message: 'Extension request auto-rejected after 12h approval window expired',
+                        changes: {
+                            requesterId: requesterId || null,
+                            requesterName: requester?.fullName || null,
+                            taskId: task.id,
+                            leadName: lead?.name || null,
+                            reason: 'extension_approval_window_expired',
+                            extensionApprovalWindowHours: EXTENSION_APPROVAL_WINDOW_HOURS,
+                        },
+                    },
+                });
+            }));
+        });
+
+        return expiredTasks.length;
     }
 
     // Create a new lead
@@ -401,23 +1048,30 @@ class LeadService {
 
             const leadIds = leads.map((lead) => lead.id);
             await this.expirePendingClaimTasks(companyId, leadIds);
+            await this.expirePendingExtensionTasks(companyId, leadIds);
+            const createdAtMap = new Map(leads.map((lead) => [lead.id, lead.createdAt]));
             const [timerStartMap, forcedOverdueLeadSet] = await Promise.all([
                 this.getLeadTimerStartMap(companyId, leadIds),
                 this.getForcedOverdueLeadSet(companyId, leadIds),
             ]);
-            const pendingClaimTasks = await prisma.task.findMany({
+            const timerComputationMap = await this.getLeadTimerComputationMap(companyId, leadIds, timerStartMap, createdAtMap);
+
+            const pendingApprovalTasks = await prisma.task.findMany({
                 where: {
                     companyId,
                     linkedType: 'Lead',
                     linkedId: { in: leadIds },
                     status: 'Pending',
-                    title: { contains: 'Claim request', mode: 'insensitive' },
+                    OR: [
+                        { title: { contains: 'Claim request', mode: 'insensitive' } },
+                        { title: { contains: 'Extension request', mode: 'insensitive' } },
+                    ],
                 },
                 orderBy: { createdAt: 'desc' },
                 select: { id: true, linkedId: true, notes: true, dueDate: true, createdAt: true }
             });
 
-            const requesterIds = pendingClaimTasks
+            const requesterIds = pendingApprovalTasks
                 .map((task) => this.extractRequesterIdFromNotes(task.notes))
                 .filter(Boolean);
 
@@ -429,17 +1083,17 @@ class LeadService {
                 : [];
 
             const requesterMap = new Map(requesters.map((userRecord) => [userRecord.id, userRecord]));
-            const openClaimTaskByLead = new Map();
+            const openApprovalTaskByLead = new Map();
             const pendingClaimLeadIdSetForRequester = new Set();
 
-            pendingClaimTasks.forEach((task) => {
-                if (!openClaimTaskByLead.has(task.linkedId)) {
-                    openClaimTaskByLead.set(task.linkedId, task);
+            pendingApprovalTasks.forEach((task) => {
+                if (!openApprovalTaskByLead.has(task.linkedId)) {
+                    openApprovalTaskByLead.set(task.linkedId, task);
                 }
             });
 
             if (requesterId) {
-                pendingClaimTasks.forEach((task) => {
+                pendingApprovalTasks.forEach((task) => {
                     const taskRequesterId = this.extractRequesterIdFromNotes(task.notes);
                     if (taskRequesterId === requesterId) {
                         pendingClaimLeadIdSetForRequester.add(task.linkedId);
@@ -450,23 +1104,30 @@ class LeadService {
             const enrichedLeads = leads.map((lead) => ({
                 ...lead,
                 leadTimerForcedOverdue: forcedOverdueLeadSet.has(lead.id),
-                claimLockActive: openClaimTaskByLead.has(lead.id),
-                claimLockExpiresAt: openClaimTaskByLead.has(lead.id)
-                    ? this.extractClaimDeadlineFromTask(openClaimTaskByLead.get(lead.id))
+                grantedExtensionDays: timerComputationMap.get(lead.id)?.extensionDaysUsed || 0,
+                leadTimerComputedEndAt: timerComputationMap.get(lead.id)?.computedEndAt || null,
+                claimLockActive: openApprovalTaskByLead.has(lead.id),
+                claimLockExpiresAt: openApprovalTaskByLead.has(lead.id)
+                    ? this.extractClaimDeadlineFromTask(openApprovalTaskByLead.get(lead.id))
                     : null,
                 claimLockRequestedBy: (() => {
-                    const claimTask = openClaimTaskByLead.get(lead.id);
-                    if (!claimTask) return null;
-                    const claimRequesterId = this.extractRequesterIdFromNotes(claimTask.notes);
+                    const lockTask = openApprovalTaskByLead.get(lead.id);
+                    if (!lockTask) return null;
+                    const claimRequesterId = this.extractRequesterIdFromNotes(lockTask.notes);
                     return claimRequesterId ? (requesterMap.get(claimRequesterId) || null) : null;
+                })(),
+                claimLockReason: (() => {
+                    const lockTask = openApprovalTaskByLead.get(lead.id);
+                    if (!lockTask) return null;
+                    return this.extractRequestTypeFromNotes(lockTask.notes) || REQUEST_TYPE_CLAIM;
                 })(),
                 leadTimerStartAt: timerStartMap.get(lead.id) || lead.createdAt,
                 claimRequestPendingByCurrentUser: pendingClaimLeadIdSetForRequester.has(lead.id),
-                openClaimRequestsCount: openClaimTaskByLead.has(lead.id) ? 1 : 0,
+                openClaimRequestsCount: openApprovalTaskByLead.has(lead.id) ? 1 : 0,
                 openClaimRequesters: (() => {
-                    const claimTask = openClaimTaskByLead.get(lead.id);
-                    if (!claimTask) return [];
-                    const claimRequesterId = this.extractRequesterIdFromNotes(claimTask.notes);
+                    const lockTask = openApprovalTaskByLead.get(lead.id);
+                    if (!lockTask) return [];
+                    const claimRequesterId = this.extractRequesterIdFromNotes(lockTask.notes);
                     if (!claimRequesterId || !requesterMap.has(claimRequesterId)) return [];
                     return [requesterMap.get(claimRequesterId)];
                 })()
@@ -526,10 +1187,50 @@ class LeadService {
                 this.getLeadTimerStartAt(companyId, lead.id, lead.createdAt),
                 this.isLeadForcedOverdue(companyId, lead.id),
             ]);
+            await this.expirePendingClaimTasks(companyId, [lead.id]);
+            await this.expirePendingExtensionTasks(companyId, [lead.id]);
+
+            const [pendingLockTask, extensionDaysMap] = await Promise.all([
+                prisma.task.findFirst({
+                    where: {
+                        companyId,
+                        linkedType: 'Lead',
+                        linkedId: lead.id,
+                        status: 'Pending',
+                        OR: [
+                            { title: { contains: 'Claim request', mode: 'insensitive' } },
+                            { title: { contains: 'Extension request', mode: 'insensitive' } },
+                        ],
+                    },
+                    orderBy: { createdAt: 'desc' },
+                    select: { id: true, notes: true, dueDate: true, createdAt: true },
+                }),
+                this.getLeadTimerComputationMap(
+                    companyId,
+                    [lead.id],
+                    new Map([[lead.id, timerStartAt]]),
+                    new Map([[lead.id, lead.createdAt]])
+                ),
+            ]);
+
+            const lockRequesterId = pendingLockTask ? this.extractRequesterIdFromNotes(pendingLockTask.notes) : null;
+            const lockRequester = lockRequesterId
+                ? await prisma.user.findFirst({
+                    where: { id: lockRequesterId, companyId },
+                    select: { id: true, fullName: true, email: true },
+                })
+                : null;
+
             return this.attachLeadTimerData({
                 ...lead,
                 leadTimerStartAt: timerStartAt,
                 leadTimerForcedOverdue: isForcedOverdue,
+                grantedExtensionDays: extensionDaysMap.get(lead.id)?.extensionDaysUsed || 0,
+                leadTimerComputedEndAt: extensionDaysMap.get(lead.id)?.computedEndAt || null,
+                claimLockActive: !!pendingLockTask,
+                claimLockExpiresAt: pendingLockTask ? this.extractClaimDeadlineFromTask(pendingLockTask) : null,
+                claimLockReason: pendingLockTask ? (this.extractRequestTypeFromNotes(pendingLockTask.notes) || REQUEST_TYPE_CLAIM) : null,
+                claimLockRequestedBy: lockRequester,
             });
         } catch (error) {
             throw new Error(`Error fetching lead: ${error.message}`);
@@ -894,7 +1595,17 @@ class LeadService {
             }
 
             const timerStartAt = await this.getLeadTimerStartAt(companyId, lead.id, lead.createdAt);
-            const timerData = this.getLeadTimerData(timerStartAt);
+            const timerComputationMap = await this.getLeadTimerComputationMap(
+                companyId,
+                [lead.id],
+                new Map([[lead.id, timerStartAt]]),
+                new Map([[lead.id, lead.createdAt]])
+            );
+            const timerData = this.getLeadTimerData(
+                timerStartAt,
+                timerComputationMap.get(lead.id)?.extensionDaysUsed || 0,
+                timerComputationMap.get(lead.id)?.computedEndAt || null
+            );
             if (!timerData.leadTimerExpired) {
                 throw new Error('Lead claim is available only after 15 days');
             }
@@ -950,7 +1661,10 @@ class LeadService {
                     linkedType: 'Lead',
                     linkedId: lead.id,
                     status: 'Pending',
-                    title: { contains: 'Claim request', mode: 'insensitive' },
+                    OR: [
+                        { title: { contains: 'Claim request', mode: 'insensitive' } },
+                        { title: { contains: 'Extension request', mode: 'insensitive' } },
+                    ],
                 },
                 orderBy: { createdAt: 'desc' },
                 select: { id: true, notes: true, dueDate: true, createdAt: true }
@@ -965,7 +1679,9 @@ class LeadService {
                     })
                     : null;
                 const expiry = this.extractClaimDeadlineFromTask(existingRequest);
-                throw new Error(`Claim already requested${existingRequester?.fullName ? ` by ${existingRequester.fullName}` : ''}. It unlocks after ${expiry.toLocaleString()}`);
+                const lockType = this.extractRequestTypeFromNotes(existingRequest.notes) || REQUEST_TYPE_CLAIM;
+                const lockLabel = lockType === REQUEST_TYPE_EXTENSION ? 'Extension review is pending' : 'Claim already requested';
+                throw new Error(`${lockLabel}${existingRequester?.fullName ? ` by ${existingRequester.fullName}` : ''}. It unlocks after ${expiry.toLocaleString()}`);
             }
 
             const now = new Date();
@@ -984,7 +1700,7 @@ class LeadService {
                     dueTime: dueTime,
                     status: 'Pending',
                     priority: 'High',
-                    notes: `Lead claim request\nRequester: ${requester.fullName} (${requester.email})\nRequester ID: ${requester.id}\nCurrent Owner: ${lead.salesperson?.fullName || 'Unassigned'}\nApprover: ${targetUser.fullName}\nApproval Window: ${CLAIM_APPROVAL_WINDOW_HOURS}h`,
+                    notes: `Request Type: ${REQUEST_TYPE_CLAIM}\nLead claim request\nRequester: ${requester.fullName} (${requester.email})\nRequester ID: ${requester.id}\nCurrent Owner: ${lead.salesperson?.fullName || 'Unassigned'}\nCurrent Owner ID: ${lead.salesperson?.id || 'none'}\nApprover: ${targetUser.fullName}\nApprover ID: ${targetUser.id || 'none'}\nApproval Window: ${CLAIM_APPROVAL_WINDOW_HOURS}h`,
                     companyId: companyId,
                 },
             });
@@ -1008,6 +1724,38 @@ class LeadService {
                 },
             });
 
+            const ownerEmail = lead.salesperson?.email || null;
+            const approverEmail = targetUser.email || null;
+
+            if (ownerEmail) {
+                await this.queueEmailSafe({
+                    to: ownerEmail,
+                    templateBuilder: claimRequestedToOwnerTemplate,
+                    templateParams: {
+                        leadName: lead.name,
+                        ownerName: lead.salesperson?.fullName || 'Lead Owner',
+                        requesterName: requester.fullName,
+                        approvalDeadlineAt: approvalDeadline,
+                    },
+                    jobId: this.buildSafeJobId(['claim-request-owner', claimTask.id]),
+                });
+            }
+
+            if (approverEmail) {
+                await this.queueEmailSafe({
+                    to: approverEmail,
+                    templateBuilder: claimRequestedToApproverUrgentTemplate,
+                    templateParams: {
+                        leadName: lead.name,
+                        approverName: targetUser.fullName,
+                        requesterName: requester.fullName,
+                        ownerName: lead.salesperson?.fullName || 'Unassigned',
+                        approvalDeadlineAt: approvalDeadline,
+                    },
+                    jobId: this.buildSafeJobId(['claim-request-approver', claimTask.id]),
+                });
+            }
+
             return {
                 taskId: claimTask.id,
                 requestedTo: {
@@ -1019,11 +1767,326 @@ class LeadService {
                 lead: this.attachLeadTimerData({
                     ...lead,
                     leadTimerStartAt: timerStartAt,
+                    grantedExtensionDays: timerComputationMap.get(lead.id)?.extensionDaysUsed || 0,
+                    leadTimerComputedEndAt: timerComputationMap.get(lead.id)?.computedEndAt || null,
                 }),
             };
         } catch (error) {
             throw new Error(`Error requesting lead claim: ${error.message}`);
         }
+    }
+
+    async requestExtension({
+        leadId,
+        requesterId,
+        companyId,
+        requestedDays,
+        justification,
+        closurePlan,
+    }) {
+        const safeRequestedDays = Number(requestedDays);
+        if (!Number.isFinite(safeRequestedDays) || safeRequestedDays < 1 || safeRequestedDays > EXTENSION_MAX_DAYS) {
+            throw new Error(`Extension days must be between 1 and ${EXTENSION_MAX_DAYS}`);
+        }
+        if (!justification || !String(justification).trim()) {
+            throw new Error('Justification is required');
+        }
+        if (!closurePlan || !String(closurePlan).trim()) {
+            throw new Error('Closure plan is required');
+        }
+
+        const [lead, requester] = await Promise.all([
+            prisma.lead.findFirst({
+                where: { id: leadId, companyId },
+                include: {
+                    salesperson: {
+                        select: { id: true, fullName: true, email: true },
+                    },
+                },
+            }),
+            prisma.user.findFirst({
+                where: { id: requesterId, companyId },
+                select: { id: true, fullName: true, email: true, role: true },
+            }),
+        ]);
+
+        if (!lead) throw new Error('Lead not found');
+        if (!requester) throw new Error('Requester not found');
+
+        await this.expirePendingClaimTasks(companyId, [lead.id]);
+        await this.expirePendingExtensionTasks(companyId, [lead.id]);
+
+        const isRequesterAdmin = isCompanyAdminRole(requester.role);
+        const isRequesterOwner = lead.salespersonId && lead.salespersonId === requester.id;
+        if (!isRequesterAdmin && !isRequesterOwner) {
+            throw new Error('Only lead owner or company admin can request extension');
+        }
+
+        const timerStartAt = await this.getLeadTimerStartAt(companyId, lead.id, lead.createdAt);
+        const timerComputationMap = await this.getLeadTimerComputationMap(
+            companyId,
+            [lead.id],
+            new Map([[lead.id, timerStartAt]]),
+            new Map([[lead.id, lead.createdAt]])
+        );
+        const existingExtensionDays = timerComputationMap.get(lead.id)?.extensionDaysUsed || 0;
+        const timerData = this.getLeadTimerData(
+            timerStartAt,
+            existingExtensionDays,
+            timerComputationMap.get(lead.id)?.computedEndAt || null
+        );
+        if (!timerData.leadTimerExpired) {
+            throw new Error('Extension request is available only after current timer expires');
+        }
+        if (existingExtensionDays >= EXTENSION_MAX_DAYS) {
+            throw new Error(`Maximum extension of ${EXTENSION_MAX_DAYS} days already used`);
+        }
+        if (existingExtensionDays + safeRequestedDays > EXTENSION_MAX_DAYS) {
+            throw new Error(`Requested days exceed max extension. Remaining extension days: ${EXTENSION_MAX_DAYS - existingExtensionDays}`);
+        }
+
+        const existingPending = await prisma.task.findFirst({
+            where: {
+                companyId,
+                linkedType: 'Lead',
+                linkedId: lead.id,
+                status: 'Pending',
+                OR: [
+                    { title: { contains: 'Claim request', mode: 'insensitive' } },
+                    { title: { contains: 'Extension request', mode: 'insensitive' } },
+                ],
+            },
+            orderBy: { createdAt: 'desc' },
+            select: { id: true, notes: true, dueDate: true, createdAt: true },
+        });
+
+        if (existingPending) {
+            const existingRequesterId = this.extractRequesterIdFromNotes(existingPending.notes);
+            const existingRequester = existingRequesterId
+                ? await prisma.user.findFirst({
+                    where: { id: existingRequesterId, companyId },
+                    select: { fullName: true },
+                })
+                : null;
+            const expiry = this.extractClaimDeadlineFromTask(existingPending);
+            throw new Error(`A lead approval request is already pending${existingRequester?.fullName ? ` by ${existingRequester.fullName}` : ''}. It unlocks after ${expiry.toLocaleString()}`);
+        }
+
+        if (isRequesterAdmin) {
+            await this.createAuditLog({
+                leadId: lead.id,
+                companyId,
+                actorUserId: requester.id,
+                action: 'EXTENSION_APPROVED',
+                message: `Extension approved directly by admin for ${safeRequestedDays} day(s)`,
+                changes: {
+                    extensionDays: safeRequestedDays,
+                    justification: String(justification).trim(),
+                    closurePlan: String(closurePlan).trim(),
+                    previousExtensionDays: existingExtensionDays,
+                    totalExtensionDays: Math.min(EXTENSION_MAX_DAYS, existingExtensionDays + safeRequestedDays),
+                },
+            });
+
+            return {
+                approvedDirectly: true,
+                extensionDays: safeRequestedDays,
+                leadId: lead.id,
+            };
+        }
+
+        const approver = await this.resolveDepartmentHeadApproverForUser({
+            companyId,
+            requesterId: requester.id,
+        });
+        if (!approver) {
+            throw new Error('No department head/company admin found to review extension request');
+        }
+
+        const approvalDeadline = new Date(Date.now() + (EXTENSION_APPROVAL_WINDOW_HOURS * 60 * 60 * 1000));
+        const dueTime = `${String(approvalDeadline.getHours()).padStart(2, '0')}:${String(approvalDeadline.getMinutes()).padStart(2, '0')}`;
+
+        const extensionTask = await prisma.task.create({
+            data: {
+                title: `Extension request for lead: ${lead.name}`,
+                type: 'Email',
+                linkedType: 'Lead',
+                linkedId: lead.id,
+                linkedTo: lead.name,
+                assignedTo: approver.fullName,
+                dueDate: approvalDeadline,
+                dueTime,
+                status: 'Pending',
+                priority: 'High',
+                notes: `Request Type: ${REQUEST_TYPE_EXTENSION}\nLead extension request\nRequester: ${requester.fullName} (${requester.email})\nRequester ID: ${requester.id}\nCurrent Owner: ${lead.salesperson?.fullName || 'Unassigned'}\nCurrent Owner ID: ${lead.salesperson?.id || 'none'}\nApprover: ${approver.fullName}\nApprover ID: ${approver.id}\nRequested Extension Days: ${safeRequestedDays}\nJustification: ${String(justification).trim()}\nClosure Plan: ${String(closurePlan).trim()}\nApproval Window: ${EXTENSION_APPROVAL_WINDOW_HOURS}h`,
+                companyId,
+            },
+        });
+
+        await this.createAuditLog({
+            leadId: lead.id,
+            companyId,
+            actorUserId: requester.id,
+            action: 'EXTENSION_REQUEST',
+            message: `Extension requested for ${safeRequestedDays} day(s) by ${requester.fullName}`,
+            changes: {
+                requestedDays: safeRequestedDays,
+                requestedToUserId: approver.id,
+                requestedToName: approver.fullName,
+                justification: String(justification).trim(),
+                closurePlan: String(closurePlan).trim(),
+                approvalWindowHours: EXTENSION_APPROVAL_WINDOW_HOURS,
+                approvalDeadlineAt: approvalDeadline.toISOString(),
+                taskId: extensionTask.id,
+            },
+        });
+
+        return {
+            approvedDirectly: false,
+            taskId: extensionTask.id,
+            approvalDeadlineAt: approvalDeadline,
+            requestedTo: {
+                id: approver.id,
+                fullName: approver.fullName,
+                email: approver.email,
+            },
+        };
+    }
+
+    async decideExtensionRequest({ taskId, decision, companyId, actorUserId }) {
+        await this.expirePendingExtensionTasks(companyId);
+
+        const actor = await prisma.user.findFirst({
+            where: { id: actorUserId, companyId },
+            select: { id: true, fullName: true },
+        });
+        if (!actor) throw new Error('User not found');
+
+        const task = await prisma.task.findFirst({
+            where: {
+                id: taskId,
+                companyId,
+                linkedType: 'Lead',
+                status: 'Pending',
+                title: { contains: 'Extension request', mode: 'insensitive' },
+            },
+        });
+        if (!task) throw new Error('Extension request activity not found');
+
+        if (task.assignedTo !== actor.fullName) {
+            throw new Error('You are not authorized to decide this extension request');
+        }
+
+        if (task.dueDate && new Date(task.dueDate).getTime() < Date.now()) {
+            await prisma.task.update({
+                where: { id: task.id },
+                data: {
+                    status: 'Completed',
+                    notes: `${task.notes || ''}\nDecision: EXPIRED (approval window of ${EXTENSION_APPROVAL_WINDOW_HOURS}h passed) on ${new Date().toISOString()}`,
+                },
+            });
+            throw new Error('Extension request expired (approval window is over 12h)');
+        }
+
+        const requesterId = this.extractRequesterIdFromNotes(task.notes);
+        const requestedDays = this.extractRequestedExtensionDaysFromNotes(task.notes);
+        const justification = this.extractJustificationFromNotes(task.notes);
+        const closurePlan = this.extractClosurePlanFromNotes(task.notes);
+
+        if (!requesterId || !requestedDays) {
+            throw new Error('Invalid extension request payload');
+        }
+
+        const [lead, requester] = await Promise.all([
+            prisma.lead.findFirst({
+                where: { id: task.linkedId, companyId },
+                select: { id: true, name: true, createdAt: true },
+            }),
+            prisma.user.findFirst({
+                where: { id: requesterId, companyId },
+                select: { id: true, fullName: true, email: true },
+            }),
+        ]);
+
+        if (!lead) throw new Error('Lead not found');
+        if (!requester) throw new Error('Requester not found');
+
+        const timerStartAt = await this.getLeadTimerStartAt(companyId, lead.id, lead.createdAt);
+        const timerComputationMap = await this.getLeadTimerComputationMap(
+            companyId,
+            [lead.id],
+            new Map([[lead.id, timerStartAt]]),
+            new Map([[lead.id, lead.createdAt]])
+        );
+        const currentExtensionDays = timerComputationMap.get(lead.id)?.extensionDaysUsed || 0;
+
+        if (decision === 'approve') {
+            if (currentExtensionDays >= EXTENSION_MAX_DAYS) {
+                throw new Error(`Maximum extension of ${EXTENSION_MAX_DAYS} days already used`);
+            }
+            if (currentExtensionDays + requestedDays > EXTENSION_MAX_DAYS) {
+                throw new Error(`Requested extension exceeds max allowed ${EXTENSION_MAX_DAYS} days`);
+            }
+        }
+
+        const nowIso = new Date().toISOString();
+        const updatedTask = await prisma.$transaction(async (tx) => {
+            const completedTask = await tx.task.update({
+                where: { id: task.id },
+                data: {
+                    status: 'Completed',
+                    notes: `${task.notes || ''}\nDecision: ${decision.toUpperCase()} by ${actor.fullName} on ${nowIso}`,
+                },
+            });
+
+            if (decision === 'approve') {
+                await tx.leadAuditLog.create({
+                    data: {
+                        leadId: lead.id,
+                        companyId,
+                        actorUserId,
+                        action: 'EXTENSION_APPROVED',
+                        message: `Extension approved for ${requestedDays} day(s)`,
+                        changes: {
+                            extensionDays: requestedDays,
+                            previousExtensionDays: currentExtensionDays,
+                            totalExtensionDays: Math.min(EXTENSION_MAX_DAYS, currentExtensionDays + requestedDays),
+                            requesterId: requester.id,
+                            requesterName: requester.fullName,
+                            taskId: task.id,
+                            justification,
+                            closurePlan,
+                        },
+                    },
+                });
+            } else {
+                await tx.leadAuditLog.create({
+                    data: {
+                        leadId: lead.id,
+                        companyId,
+                        actorUserId,
+                        action: 'EXTENSION_REJECTED',
+                        message: `Extension rejected by ${actor.fullName}`,
+                        changes: {
+                            requestedDays,
+                            requesterId: requester.id,
+                            requesterName: requester.fullName,
+                            taskId: task.id,
+                        },
+                    },
+                });
+            }
+
+            return completedTask;
+        });
+
+        return {
+            task: updatedTask,
+            leadId: lead.id,
+            requester,
+            decision,
+            requestedDays,
+        };
     }
 
     async forceClaimOpenForTesting(leadId, companyId, actorUserId) {
@@ -1055,6 +2118,7 @@ class LeadService {
 
     async getClaimActivities(companyId, userId) {
         await this.expirePendingClaimTasks(companyId);
+        await this.expirePendingExtensionTasks(companyId);
 
         const user = await prisma.user.findFirst({
             where: { id: userId, companyId },
@@ -1070,7 +2134,10 @@ class LeadService {
                 companyId,
                 linkedType: 'Lead',
                 status: 'Pending',
-                title: { contains: 'Claim request', mode: 'insensitive' },
+                OR: [
+                    { title: { contains: 'Claim request', mode: 'insensitive' } },
+                    { title: { contains: 'Extension request', mode: 'insensitive' } },
+                ],
                 assignedTo: user.fullName
             },
             orderBy: { createdAt: 'desc' }
@@ -1101,6 +2168,12 @@ class LeadService {
             this.getLeadTimerStartMap(companyId, leadIds),
             this.getForcedOverdueLeadSet(companyId, leadIds),
         ]);
+        const timerComputationMap = await this.getLeadTimerComputationMap(
+            companyId,
+            leadIds,
+            timerStartMap,
+            new Map(leads.map((item) => [item.id, item.createdAt]))
+        );
 
         const leadMap = new Map(leads.map((lead) => [lead.id, lead]));
         const requesterMap = new Map(requesters.map((userRecord) => [userRecord.id, userRecord]));
@@ -1109,20 +2182,28 @@ class LeadService {
             const requesterId = this.extractRequesterIdFromNotes(task.notes);
             const lead = leadMap.get(task.linkedId);
             const requester = requesterMap.get(requesterId);
+            const requestType = this.extractRequestTypeFromNotes(task.notes)
+                || (task.title?.toLowerCase().includes('extension request') ? REQUEST_TYPE_EXTENSION : REQUEST_TYPE_CLAIM);
             return {
                 id: task.id,
                 taskId: task.id,
+                requestType,
                 createdAt: task.createdAt,
                 dueDate: task.dueDate,
                 approvalDeadlineAt: this.extractClaimDeadlineFromTask(task),
                 title: task.title,
                 status: task.status,
                 notes: task.notes,
+                requestedExtensionDays: requestType === REQUEST_TYPE_EXTENSION ? this.extractRequestedExtensionDaysFromNotes(task.notes) : null,
+                justification: requestType === REQUEST_TYPE_EXTENSION ? this.extractJustificationFromNotes(task.notes) : null,
+                closurePlan: requestType === REQUEST_TYPE_EXTENSION ? this.extractClosurePlanFromNotes(task.notes) : null,
                 lead: lead
                     ? this.attachLeadTimerData({
                         ...lead,
                         leadTimerStartAt: timerStartMap.get(lead.id) || lead.createdAt,
                         leadTimerForcedOverdue: forcedOverdueLeadSet.has(lead.id),
+                        grantedExtensionDays: timerComputationMap.get(lead.id)?.extensionDaysUsed || 0,
+                        leadTimerComputedEndAt: timerComputationMap.get(lead.id)?.computedEndAt || null,
                     })
                     : null,
                 requester: requester || null
@@ -1153,6 +2234,12 @@ class LeadService {
 
         if (!task) {
             throw new Error('Claim request activity not found');
+        }
+
+        const requestType = this.extractRequestTypeFromNotes(task.notes)
+            || (task.title?.toLowerCase().includes('extension request') ? REQUEST_TYPE_EXTENSION : REQUEST_TYPE_CLAIM);
+        if (requestType === REQUEST_TYPE_EXTENSION) {
+            throw new Error('This is an extension request. Use extension decision endpoint.');
         }
 
         if (task.status !== 'Pending') {
@@ -1340,6 +2427,34 @@ class LeadService {
 
             updatedTask = transactionResult.decidedTask;
             autoRejectedCount = transactionResult.autoRejectedCount;
+
+            if (previousOwner?.email) {
+                await this.queueEmailSafe({
+                    to: previousOwner.email,
+                    templateBuilder: claimApprovedOwnershipTemplate,
+                    templateParams: {
+                        leadName: lead.name,
+                        recipientName: previousOwner.fullName,
+                        previousOwnerName: previousOwner.fullName,
+                        newOwnerName: requester.fullName,
+                    },
+                    jobId: this.buildSafeJobId(['claim-approved-prev-owner', task.id]),
+                });
+            }
+
+            if (requester?.email) {
+                await this.queueEmailSafe({
+                    to: requester.email,
+                    templateBuilder: claimApprovedOwnershipTemplate,
+                    templateParams: {
+                        leadName: lead.name,
+                        recipientName: requester.fullName,
+                        previousOwnerName: previousOwner?.fullName || 'Unassigned',
+                        newOwnerName: requester.fullName,
+                    },
+                    jobId: this.buildSafeJobId(['claim-approved-new-owner', task.id]),
+                });
+            }
         } else {
             const transactionResult = await prisma.$transaction(async (tx) => {
                 const decidedTask = await tx.task.update({
@@ -1382,6 +2497,35 @@ class LeadService {
             decision,
             autoRejectedCount,
         };
+    }
+
+    async decideApprovalRequest({ taskId, decision, companyId, actorUserId }) {
+        const task = await prisma.task.findFirst({
+            where: {
+                id: taskId,
+                companyId,
+                linkedType: 'Lead',
+                status: 'Pending',
+                OR: [
+                    { title: { contains: 'Claim request', mode: 'insensitive' } },
+                    { title: { contains: 'Extension request', mode: 'insensitive' } },
+                ],
+            },
+            select: { id: true, title: true, notes: true },
+        });
+
+        if (!task) {
+            throw new Error('Approval request not found');
+        }
+
+        const requestType = this.extractRequestTypeFromNotes(task.notes)
+            || (task.title?.toLowerCase().includes('extension request') ? REQUEST_TYPE_EXTENSION : REQUEST_TYPE_CLAIM);
+
+        if (requestType === REQUEST_TYPE_EXTENSION) {
+            return this.decideExtensionRequest({ taskId, decision, companyId, actorUserId });
+        }
+
+        return this.decideClaimRequest({ taskId, decision, companyId, actorUserId });
     }
 }
 

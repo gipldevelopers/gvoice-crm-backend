@@ -77,6 +77,24 @@ const mapEmployee = (employee) => {
     };
 };
 
+const ensureSingleDepartmentHead = async ({ companyId, department, excludeUserId = null }) => {
+    if (!department || !department.trim()) return;
+
+    const existingHead = await prisma.user.findFirst({
+        where: {
+            companyId,
+            department: department.trim(),
+            role: { equals: EMPLOYEE_ROLES.HEAD_OF_DEPARTMENT, mode: 'insensitive' },
+            ...(excludeUserId ? { NOT: { id: excludeUserId } } : {}),
+        },
+        select: { id: true, fullName: true },
+    });
+
+    if (existingHead) {
+        throw new Error(`Only one Head of Department is allowed in "${department}". Existing HoD: ${existingHead.fullName}`);
+    }
+};
+
 const validateReportingStructure = async ({
     companyId,
     role,
@@ -220,6 +238,13 @@ const createEmployee = async (data) => {
 
     const normalizedRole = normalizeRole(role);
 
+    if (normalizedRole === EMPLOYEE_ROLES.HEAD_OF_DEPARTMENT) {
+        await ensureSingleDepartmentHead({
+            companyId,
+            department,
+        });
+    }
+
     const existingUser = await prisma.user.findFirst({
         where: {
             OR: [{ email }, { username }]
@@ -291,6 +316,14 @@ const updateEmployee = async (id, data, companyId) => {
     const normalizedRole = normalizeRole(role || existing.role);
     const normalizedDepartment = normalizedRole === EMPLOYEE_ROLES.COMPANY_ADMIN ? null : (department || null);
     const normalizedManagerId = reportsToId === '' ? null : reportsToId;
+
+    if (normalizedRole === EMPLOYEE_ROLES.HEAD_OF_DEPARTMENT) {
+        await ensureSingleDepartmentHead({
+            companyId,
+            department: normalizedDepartment,
+            excludeUserId: id,
+        });
+    }
 
     const reportingManager = await validateReportingStructure({
         companyId,

@@ -2,14 +2,21 @@ const { Queue, Worker } = require('bullmq');
 const nodemailer = require('nodemailer');
 const Redis = require('ioredis');
 
-// Redis connection configuration
+const REDIS_HOST = process.env.REDIS_HOST || '127.0.0.1';
+const REDIS_PORT = parseInt(process.env.REDIS_PORT || '6379', 10);
+const REDIS_PASSWORD = process.env.REDIS_PASSWORD || undefined;
+
 const redisConnection = new Redis({
-    host: 'localhost',
-    port: 6379,
+    host: REDIS_HOST,
+    port: REDIS_PORT,
+    password: REDIS_PASSWORD,
     maxRetriesPerRequest: null,
+    enableReadyCheck: true,
+});
+redisConnection.on('error', (error) => {
+    console.error(`[mailQueue] redis error: ${error.message}`);
 });
 
-// Create email queue
 const emailQueue = new Queue('email-queue', {
     connection: redisConnection,
     defaultJobOptions: {
@@ -19,149 +26,121 @@ const emailQueue = new Queue('email-queue', {
             delay: 2000,
         },
         removeOnComplete: {
-            age: 24 * 3600, // Keep completed jobs for 24 hours
+            age: 24 * 3600,
             count: 1000,
         },
         removeOnFail: {
-            age: 7 * 24 * 3600, // Keep failed jobs for 7 days
+            age: 7 * 24 * 3600,
         },
     },
 });
 
-// Create Nodemailer transporter
-const createTransporter = () => {
-    return nodemailer.createTransport({
-        host: process.env.SMTP_HOST,
-        port: parseInt(process.env.SMTP_PORT || '587'),
-        secure: process.env.SMTP_PORT === '465', // true for 465, false for other ports
-        auth: {
-            user: process.env.SMTP_USER,
-            pass: process.env.SMTP_PASS,
-        },
-    });
-};
+let workerInstance = null;
+
+const createTransporter = () => nodemailer.createTransport({
+    host: process.env.SMTP_HOST,
+    port: parseInt(process.env.SMTP_PORT || '587', 10),
+    secure: String(process.env.SMTP_PORT || '587') === '465',
+    auth: {
+        user: process.env.SMTP_USER,
+        pass: process.env.SMTP_PASS,
+    },
+});
 
 /**
- * Add an email job to the queue
- * @param {Object} data - Email data
- * @param {string} data.to - Recipient email address
- * @param {string} data.subject - Email subject
- * @param {string} data.html - HTML content
- * @param {string} [data.text] - Plain text content (optional)
- * @param {number} [delayInMinutes=0] - Delay in minutes before sending
- * @returns {Promise<Object>} Job object with id
+ * Add an email job to the queue.
+ * @param {Object} data
+ * @param {string|string[]} data.to
+ * @param {string} data.subject
+ * @param {string} data.html
+ * @param {string} [data.text]
+ * @param {string} [data.from]
+ * @param {number} [delayInMinutes=0]
+ * @param {Object} [options]
+ * @param {string} [options.jobId]
+ * @returns {Promise<Object>}
  */
-const addEmailJob = async (data, delayInMinutes = 0) => {
-    try {
-        // Validate required fields
-        if (!data.to || !data.subject || !data.html) {
-            throw new Error('Missing required email fields: to, subject, html');
-        }
-
-        const delayInMs = delayInMinutes * 60 * 1000;
-
-        const job = await emailQueue.add(
-            'send-email',
-            {
-                to: data.to,
-                subject: data.subject,
-                html: data.html,
-                text: data.text || '',
-                from: process.env.SMTP_FROM,
-            },
-            {
-                delay: delayInMs,
-            }
-        );
-
-        console.log(`✅ Email job added to queue: ${job.id}`);
-        console.log(`   → To: ${data.to}`);
-        console.log(`   → Subject: ${data.subject}`);
-        console.log(`   → Delay: ${delayInMinutes} minutes`);
-
-        return job;
-    } catch (error) {
-        console.error('❌ Error adding email job to queue:', error.message);
-        throw error;
+const addEmailJob = async (data, delayInMinutes = 0, options = {}) => {
+    if (!data.to || !data.subject || !data.html) {
+        throw new Error('Missing required email fields: to, subject, html');
     }
-};
 
-/**
- * Start the email worker to process jobs
- * @returns {Worker} Worker instance
- */
-const startEmailWorker = () => {
-    const worker = new Worker(
-        'email-queue',
-        async (job) => {
-            const { to, subject, html, text, from } = job.data;
+    const delayInMs = Math.max(0, Number(delayInMinutes || 0)) * 60 * 1000;
 
-            console.log(`📧 Processing email job: ${job.id}`);
-            console.log(`   → To: ${to}`);
-            console.log(`   → Subject: ${subject}`);
-
-            try {
-                const transporter = createTransporter();
-
-                const info = await transporter.sendMail({
-                    from: from || process.env.SMTP_FROM,
-                    to,
-                    subject,
-                    html,
-                    text,
-                });
-
-                console.log(`✅ Email sent successfully: ${job.id}`);
-                console.log(`   → Message ID: ${info.messageId}`);
-                console.log(`   → Response: ${info.response}`);
-
-                return { success: true, messageId: info.messageId };
-            } catch (error) {
-                console.error(`❌ Error sending email (Job ${job.id}):`, error.message);
-                throw error; // This will trigger retry mechanism
-            }
+    const job = await emailQueue.add(
+        'send-email',
+        {
+            to: data.to,
+            subject: data.subject,
+            html: data.html,
+            text: data.text || '',
+            from: data.from || process.env.SMTP_FROM,
         },
         {
-            connection: redisConnection,
-            concurrency: 5, // Process up to 5 emails concurrently
+            delay: delayInMs,
+            ...(options?.jobId ? { jobId: options.jobId } : {}),
         }
     );
 
-    // Event listeners for better monitoring
-    worker.on('completed', (job) => {
-        console.log(`✅ Job ${job.id} completed successfully`);
-    });
-
-    worker.on('failed', (job, err) => {
-        console.error(`❌ Job ${job?.id} failed:`, err.message);
-    });
-
-    worker.on('error', (err) => {
-        console.error('❌ Worker error:', err.message);
-    });
-
-    console.log('🚀 Email worker started and listening for jobs...');
-
-    return worker;
+    console.log(
+        `[mailQueue] queued job=${job.id} to=${Array.isArray(data.to) ? data.to.join(',') : data.to} delayMin=${delayInMinutes}`
+    );
+    return job;
 };
 
-/**
- * Graceful shutdown
- * @param {Worker} worker - Worker instance to close
- */
-const closeWorker = async (worker) => {
+const startEmailWorker = () => {
+    if (workerInstance) return workerInstance;
+
+    workerInstance = new Worker(
+        'email-queue',
+        async (job) => {
+            const { to, subject, html, text, from } = job.data;
+            const transporter = createTransporter();
+
+            const info = await transporter.sendMail({
+                from: from || process.env.SMTP_FROM,
+                to,
+                subject,
+                html,
+                text,
+            });
+
+            console.log(`[mailQueue] sent job=${job.id} messageId=${info.messageId}`);
+            return { success: true, messageId: info.messageId };
+        },
+        {
+            connection: redisConnection,
+            concurrency: parseInt(process.env.EMAIL_QUEUE_CONCURRENCY || '5', 10),
+        }
+    );
+
+    workerInstance.on('failed', (job, err) => {
+        console.error(`[mailQueue] failed job=${job?.id}: ${err.message}`);
+    });
+
+    workerInstance.on('error', (err) => {
+        console.error(`[mailQueue] worker error: ${err.message}`);
+    });
+
+    console.log(`[mailQueue] worker started (redis ${REDIS_HOST}:${REDIS_PORT})`);
+    return workerInstance;
+};
+
+const closeWorker = async (worker = workerInstance) => {
     if (worker) {
         await worker.close();
-        console.log('👋 Email worker closed gracefully');
+        workerInstance = null;
+        console.log('[mailQueue] worker closed');
     }
+
     await emailQueue.close();
     await redisConnection.quit();
-    console.log('👋 Redis connection closed');
+    console.log('[mailQueue] redis connection closed');
 };
 
 module.exports = {
     addEmailJob,
     startEmailWorker,
     closeWorker,
-    emailQueue, // Export for monitoring purposes
+    emailQueue,
 };

@@ -2,11 +2,11 @@ const Joi = require('joi');
 
 const createTaskSchema = Joi.object({
     title: Joi.string().required(),
-    type: Joi.string().valid('Call', 'Meeting', 'Email', 'WhatsApp').required(),
+    type: Joi.string().valid('Call', 'Meeting', 'Email', 'WhatsApp', 'Note', 'Follow-up', 'Proposal Progress').required(),
     linkedType: Joi.string().valid('Lead', 'Customer', 'Deal').required(),
     linkedId: Joi.string().optional(),
     linkedTo: Joi.string().optional(),
-    assignedTo: Joi.string().required(),
+    assignedTo: Joi.string().optional(),
     dueDate: Joi.string().required(),
     dueTime: Joi.string().required(),
     status: Joi.string().valid('Pending', 'Completed').default('Pending'),
@@ -16,7 +16,7 @@ const createTaskSchema = Joi.object({
 
 const updateTaskSchema = Joi.object({
     title: Joi.string().optional(),
-    type: Joi.string().valid('Call', 'Meeting', 'Email', 'WhatsApp').optional(),
+    type: Joi.string().valid('Call', 'Meeting', 'Email', 'WhatsApp', 'Note', 'Follow-up', 'Proposal Progress').optional(),
     linkedType: Joi.string().valid('Lead', 'Customer', 'Deal').optional(),
     linkedId: Joi.string().optional(),
     linkedTo: Joi.string().optional(),

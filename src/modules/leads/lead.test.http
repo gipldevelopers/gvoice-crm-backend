@@ -20,6 +20,43 @@ Authorization: Bearer {{token}}
 }
 
 ###
+PATCH http://localhost:5050/api/leads/{{leadId}}/extension-request
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "requestedDays": 5,
+  "justification": "Need extra time for final commercial closure and stakeholder alignment.",
+  "closurePlan": "Final demo in 2 days, revised quote in 3 days, closure by day 5."
+}
+
+###
+GET http://localhost:5050/api/leads/approval-activities
+Authorization: Bearer {{token}}
+
+###
+PATCH http://localhost:5050/api/leads/approval-requests/{{taskId}}/decision
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "decision": "approve"
+}
+
+###
+POST http://localhost:5050/api/leads/dev/email-test
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "templateType": "claim_requested_owner",
+  "toEmail": "developer@gohilinfotech.com",
+  "leadName": "QA Test Lead",
+  "requesterName": "QA User",
+  "ownerName": "Lead Owner"
+}
+
+###
 
 ### 2. Get all leads
 GET {{baseUrl}}

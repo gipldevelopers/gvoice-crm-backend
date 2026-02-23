@@ -3,7 +3,7 @@ const taskService = require('./task.services');
 
 const createTask = async (req, res, next) => {
     try {
-        const task = await taskService.createTask(req.body, req.user.companyId);
+        const task = await taskService.createTask(req.body, req.user.companyId, req.user);
         res.status(201).json({
             success: true,
             message: 'Task created successfully',
@@ -71,7 +71,7 @@ const getTaskById = async (req, res, next) => {
 
 const updateTask = async (req, res, next) => {
     try {
-        const task = await taskService.updateTask(req.params.id, req.body, req.user.companyId);
+        const task = await taskService.updateTask(req.params.id, req.body, req.user.companyId, req.user);
         res.status(200).json({
             success: true,
             message: 'Task updated successfully',

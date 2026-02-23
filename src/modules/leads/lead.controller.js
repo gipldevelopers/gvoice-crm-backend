@@ -227,6 +227,28 @@ class LeadController {
         }
     }
 
+    // Get approval activities (claim + extension) for current user
+    async getApprovalActivities(req, res) {
+        try {
+            const companyId = req.user.companyId;
+            const userId = req.user.id;
+            const activities = await leadService.getClaimActivities(companyId, userId);
+
+            return res.status(200).json({
+                success: true,
+                message: 'Approval activities fetched successfully',
+                data: activities,
+                count: activities.length,
+            });
+        } catch (error) {
+            console.error('Error in getApprovalActivities:', error);
+            return res.status(500).json({
+                success: false,
+                message: error.message || 'Error fetching approval activities',
+            });
+        }
+    }
+
     // Request lead claim
     async requestClaim(req, res) {
         try {
@@ -291,6 +313,77 @@ class LeadController {
         }
     }
 
+    async requestExtension(req, res) {
+        try {
+            const { id } = req.params;
+            const companyId = req.user.companyId;
+            const requesterId = req.user.id;
+            const { requestedDays, justification, closurePlan } = req.body || {};
+
+            const result = await leadService.requestExtension({
+                leadId: id,
+                requesterId,
+                companyId,
+                requestedDays,
+                justification,
+                closurePlan,
+            });
+
+            return res.status(200).json({
+                success: true,
+                message: result.approvedDirectly
+                    ? 'Extension granted by admin'
+                    : 'Extension request sent for approval',
+                data: result,
+            });
+        } catch (error) {
+            console.error('Error in requestExtension:', error);
+            const lower = (error.message || '').toLowerCase();
+            const statusCode = lower.includes('not found') ? 404 : 400;
+            return res.status(statusCode).json({
+                success: false,
+                message: error.message || 'Error requesting extension',
+            });
+        }
+    }
+
+    async decideApprovalRequest(req, res) {
+        try {
+            const { taskId } = req.params;
+            const { decision } = req.body;
+            const companyId = req.user.companyId;
+            const actorUserId = req.user.id;
+
+            if (!decision || !['approve', 'reject'].includes(String(decision).toLowerCase())) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Decision is required and must be approve or reject',
+                });
+            }
+
+            const result = await leadService.decideApprovalRequest({
+                taskId,
+                decision: String(decision).toLowerCase(),
+                companyId,
+                actorUserId,
+            });
+
+            return res.status(200).json({
+                success: true,
+                message: decision === 'approve' ? 'Approval request approved' : 'Approval request rejected',
+                data: result,
+            });
+        } catch (error) {
+            console.error('Error in decideApprovalRequest:', error);
+            const lower = (error.message || '').toLowerCase();
+            const statusCode = lower.includes('not found') ? 404 : 400;
+            return res.status(statusCode).json({
+                success: false,
+                message: error.message || 'Error deciding approval request',
+            });
+        }
+    }
+
     async forceClaimOpenForTesting(req, res) {
         try {
             if (process.env.NODE_ENV !== 'development') {
@@ -323,6 +416,50 @@ class LeadController {
             return res.status(error.message === 'Lead not found' ? 404 : 500).json({
                 success: false,
                 message: error.message || 'Error forcing lead claim open',
+            });
+        }
+    }
+
+    async sendDevEmailTemplate(req, res) {
+        try {
+            if (process.env.NODE_ENV !== 'development') {
+                return res.status(403).json({
+                    success: false,
+                    message: 'This action is available only in development mode',
+                });
+            }
+
+            if (!isCompanyAdminRole(req.user.role)) {
+                return res.status(403).json({
+                    success: false,
+                    message: 'Only Company Admin can use this action',
+                });
+            }
+
+            const result = await leadService.sendDevEmailTemplate({
+                companyId: req.user.companyId,
+                actorUserId: req.user.id,
+                templateType: req.body.templateType,
+                toEmail: req.body.toEmail,
+                leadId: req.body.leadId,
+                leadName: req.body.leadName,
+                requesterName: req.body.requesterName,
+                ownerName: req.body.ownerName,
+                approverName: req.body.approverName,
+                previousOwnerName: req.body.previousOwnerName,
+                newOwnerName: req.body.newOwnerName,
+            });
+
+            return res.status(200).json({
+                success: true,
+                message: 'Test email queued',
+                data: result,
+            });
+        } catch (error) {
+            console.error('Error in sendDevEmailTemplate:', error);
+            return res.status(400).json({
+                success: false,
+                message: error.message || 'Error sending test email',
             });
         }
     }

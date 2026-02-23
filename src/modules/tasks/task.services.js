@@ -1,7 +1,34 @@
 const prisma = require('../../database/prisma');
+const { isCompanyAdminRole } = require('../../helpers/employeeHierarchy');
 
-const createTask = async (taskData, companyId) => {
+const getCurrentUser = async (companyId, userId) => {
+    return prisma.user.findFirst({
+        where: { id: userId, companyId },
+        select: { id: true, fullName: true, role: true }
+    });
+};
+
+const resolveAssignee = async (companyId, actorUser, requestedAssignee) => {
+    const currentUser = await getCurrentUser(companyId, actorUser.id);
+    if (!currentUser) {
+        throw new Error('User not found');
+    }
+
+    if (!isCompanyAdminRole(actorUser.role)) {
+        return currentUser.fullName;
+    }
+
+    if (!requestedAssignee || !String(requestedAssignee).trim()) {
+        throw new Error('assignedTo is required for admin');
+    }
+
+    return String(requestedAssignee).trim();
+};
+
+const createTask = async (taskData, companyId, actorUser) => {
     try {
+        const assignedTo = await resolveAssignee(companyId, actorUser, taskData.assignedTo);
+
         // Prepare the data
         const data = {
             title: taskData.title,
@@ -9,7 +36,7 @@ const createTask = async (taskData, companyId) => {
             linkedType: taskData.linkedType,
             linkedId: taskData.linkedId,
             linkedTo: taskData.linkedTo || '', // Will be set based on linkedType
-            assignedTo: taskData.assignedTo,
+            assignedTo,
             dueDate: new Date(taskData.dueDate),
             dueTime: taskData.dueTime,
             status: taskData.status || 'Pending',
@@ -192,7 +219,7 @@ const getTaskById = async (id, companyId) => {
     }
 };
 
-const updateTask = async (id, updateData, companyId) => {
+const updateTask = async (id, updateData, companyId, actorUser) => {
     try {
         // Check if task exists and belongs to company
         const existingTask = await prisma.task.findFirst({
@@ -207,6 +234,21 @@ const updateTask = async (id, updateData, companyId) => {
         }
 
         const updatePayload = { ...updateData };
+
+        if (Object.prototype.hasOwnProperty.call(updateData, 'assignedTo')) {
+            if (isCompanyAdminRole(actorUser.role)) {
+                updatePayload.assignedTo = String(updateData.assignedTo || '').trim();
+                if (!updatePayload.assignedTo) {
+                    throw new Error('assignedTo cannot be empty');
+                }
+            } else {
+                const currentUser = await getCurrentUser(companyId, actorUser.id);
+                if (!currentUser) {
+                    throw new Error('User not found');
+                }
+                updatePayload.assignedTo = currentUser.fullName;
+            }
+        }
 
         // Update linkedTo name if linkedId changes
         if (updateData.linkedId && updateData.linkedId !== existingTask.linkedId) {
@@ -382,7 +424,7 @@ const getFilterOptions = async (companyId) => {
             assignedTo: employeesList.map(item => item.fullName),
             status: statusList,
             priority: priorityList,
-            type: typeList,
+            type: [...typeList, 'Note', 'Follow-up', 'Proposal Progress'],
             linkedType: linkedTypeList,
             leads: leadsList.map(l => ({ id: l.id, name: l.name, category: l.status }))
         };
