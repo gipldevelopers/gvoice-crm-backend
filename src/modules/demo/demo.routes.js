@@ -4,7 +4,7 @@ const router = express.Router();
 const demoController = require('./demo.controller');
 const demoValidation = require('./demo.validation');
 const validate = require('../../middleware/validate');
-const upload = require('../../middleware/upload');
+const { upload } = require('../../middleware/upload');
 
 // Demo CRUD routes
 router.post('/', validate(demoValidation.createDemoValidation), demoController.createDemo);

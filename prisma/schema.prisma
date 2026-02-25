@@ -43,6 +43,7 @@ model User {
   files      File[]
   leads      Lead[]   @relation("AssignedLeads")
   leadAuditLogs LeadAuditLog[]
+  leadDocuments LeadDocument[]
   deals      Deal[]   @relation("AssignedDeals")
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
@@ -72,10 +73,13 @@ model File {
 model Lead {
   id             String   @id @default(uuid())
   name           String
-  phone          String
+  phone          String?
+  countryCode    String?
   email          String?
   source         String   // Website, WhatsApp, Referral, Ads, Walk-in
-  value          Float    // Lead value in currency
+  service        String?
+  value          Float?   // Lead value in currency
+  currency       String?
   status         String   @default("New") // New, Contacted, Qualified, Lost
   notes          String?  @db.Text
   salespersonId  String?
@@ -84,6 +88,8 @@ model Lead {
   company        Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
   customer       Customer?
   auditLogs      LeadAuditLog[]
+  documents      LeadDocument[]
+
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
@@ -105,6 +111,25 @@ model LeadAuditLog {
   @@index([leadId, createdAt])
   @@index([companyId, createdAt])
   @@map("lead_audit_logs")
+}
+
+model LeadDocument {
+  id           String   @id @default(uuid())
+  leadId       String
+  lead         Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  documentType String   // "Initial SOW", "Client BOQ", "MOM Notes"
+  version      Int      // 1, 2, 3...
+  filename     String
+  originalName String
+  path         String
+  mimetype     String
+  size         Int
+  uploadedBy   String?
+  uploader     User?    @relation(fields: [uploadedBy], references: [id], onDelete: SetNull)
+  createdAt    DateTime @default(now())
+  
+  @@index([leadId, documentType])
+  @@map("lead_documents")
 }
 
 model Customer {

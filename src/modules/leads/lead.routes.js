@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const leadController = require('./lead.controller');
 const { authenticate } = require('../../middleware/auth.middleware');
+const { leadDocumentUpload } = require('../../middleware/upload');
 
 router.use(authenticate);
 
@@ -43,5 +44,10 @@ router.patch('/:id/dev-force-claim-open', leadController.forceClaimOpenForTestin
 
 // Update lead status
 router.patch('/:id/status', leadController.updateStatus);
+
+// Documents
+router.get('/:id/documents', leadController.getDocuments);
+router.post('/:id/documents', leadDocumentUpload.array('files'), leadController.uploadDocuments);
+router.delete('/:id/documents/:documentId', leadController.deleteDocument);
 
 module.exports = router;

@@ -8,10 +8,10 @@ class LeadController {
             const leadData = req.body;
             const companyId = req.user.companyId; // Assuming user info is attached via auth middleware
 
-            if (!leadData.name || !leadData.phone || !leadData.source || !leadData.value) {
+            if (!leadData.name || !leadData.source) {
                 return res.status(400).json({
                     success: false,
-                    message: 'Missing required fields: name, phone, source, and value are required',
+                    message: 'Missing required fields: name and source are required',
                 });
             }
 
@@ -279,7 +279,7 @@ class LeadController {
     async decideClaimRequest(req, res) {
         try {
             const { taskId } = req.params;
-            const { decision } = req.body;
+            const { decision, note } = req.body;
             const companyId = req.user.companyId;
             const actorUserId = req.user.id;
 
@@ -290,9 +290,17 @@ class LeadController {
                 });
             }
 
+            if (!note || !String(note).trim()) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Note is required for approving or rejecting a claim',
+                });
+            }
+
             const result = await leadService.decideClaimRequest({
                 taskId,
                 decision: String(decision).toLowerCase(),
+                note: String(note).trim(),
                 companyId,
                 actorUserId,
             });
@@ -350,7 +358,7 @@ class LeadController {
     async decideApprovalRequest(req, res) {
         try {
             const { taskId } = req.params;
-            const { decision } = req.body;
+            const { decision, note } = req.body;
             const companyId = req.user.companyId;
             const actorUserId = req.user.id;
 
@@ -361,9 +369,17 @@ class LeadController {
                 });
             }
 
+            if (!note || !String(note).trim()) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Note is required for approving or rejecting a request',
+                });
+            }
+
             const result = await leadService.decideApprovalRequest({
                 taskId,
                 decision: String(decision).toLowerCase(),
+                note: String(note).trim(),
                 companyId,
                 actorUserId,
             });
@@ -468,17 +484,17 @@ class LeadController {
     async updateStatus(req, res) {
         try {
             const { id } = req.params;
-            const { status } = req.body;
+            const { status, note } = req.body;
             const companyId = req.user.companyId;
 
-            if (!status) {
+            if (!status || !note) {
                 return res.status(400).json({
                     success: false,
-                    message: 'Status is required',
+                    message: 'Status and note are required',
                 });
             }
 
-            const updatedLead = await leadService.updateStatus(id, status, companyId, req.user.id, req.user.role);
+            const updatedLead = await leadService.updateStatus(id, status, note, companyId, req.user.id, req.user.role);
 
             return res.status(200).json({
                 success: true,
@@ -492,6 +508,84 @@ class LeadController {
             return res.status(statusCode).json({
                 success: false,
                 message: error.message || 'Error updating lead status',
+            });
+        }
+    }
+
+    async getDocuments(req, res) {
+        try {
+            const { id } = req.params;
+            const { documentType } = req.query;
+            const companyId = req.user.companyId;
+
+            const documents = await leadService.getDocuments(id, companyId, documentType);
+
+            return res.status(200).json({
+                success: true,
+                data: documents,
+            });
+        } catch (error) {
+            console.error('Error getting lead documents:', error);
+            return res.status(500).json({
+                success: false,
+                message: error.message || 'Failed to get documents',
+            });
+        }
+    }
+
+    async uploadDocuments(req, res) {
+        try {
+            const { id } = req.params;
+            const companyId = req.user.companyId;
+            const uploadedBy = req.user.id;
+            const { documentType } = req.body;
+            const files = req.files;
+
+            if (!files || files.length === 0) {
+                return res.status(400).json({ success: false, message: 'No files provided' });
+            }
+            if (!documentType) {
+                return res.status(400).json({ success: false, message: 'Document type is required' });
+            }
+
+            const result = await leadService.uploadDocuments({
+                leadId: id,
+                companyId,
+                documentType,
+                files,
+                uploadedBy
+            });
+
+            return res.status(201).json({
+                success: true,
+                message: 'Documents uploaded successfully',
+                data: result,
+            });
+        } catch (error) {
+            console.error('Error uploading lead documents:', error);
+            return res.status(500).json({
+                success: false,
+                message: error.message || 'Failed to upload documents',
+            });
+        }
+    }
+
+    async deleteDocument(req, res) {
+        try {
+            const { id, documentId } = req.params;
+            const companyId = req.user.companyId;
+
+            await leadService.deleteDocument(id, documentId, companyId);
+
+            return res.status(200).json({
+                success: true,
+                message: 'Document deleted successfully',
+            });
+        } catch (error) {
+            console.error('Error deleting lead document:', error);
+            return res.status(error.message === 'Document not found' ? 404 : 500).json({
+                success: false,
+                message: error.message || 'Failed to delete document',
             });
         }
     }

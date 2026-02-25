@@ -960,10 +960,13 @@ class LeadService {
             const lead = await prisma.lead.create({
                 data: {
                     name: leadData.name,
-                    phone: leadData.phone,
+                    phone: leadData.phone || null,
+                    countryCode: leadData.countryCode || null,
                     email: leadData.email,
                     source: leadData.source,
-                    value: parseFloat(leadData.value),
+                    service: leadData.service || null,
+                    value: leadData.value !== undefined ? parseFloat(leadData.value) : null,
+                    currency: leadData.currency || null,
                     status: leadData.status || 'New',
                     notes: leadData.notes,
                     salespersonId: leadData.salespersonId || defaultSalespersonId || null,
@@ -994,9 +997,12 @@ class LeadService {
                 changes: {
                     name: lead.name,
                     phone: lead.phone,
+                    countryCode: lead.countryCode,
                     email: lead.email,
                     source: lead.source,
+                    service: lead.service,
                     value: lead.value,
+                    currency: lead.currency,
                     status: lead.status,
                     salespersonId: lead.salespersonId,
                 },
@@ -1258,10 +1264,13 @@ class LeadService {
                 },
                 data: {
                     ...(leadData.name && { name: leadData.name }),
-                    ...(leadData.phone && { phone: leadData.phone }),
+                    ...(leadData.phone !== undefined && { phone: leadData.phone }),
+                    ...(leadData.countryCode !== undefined && { countryCode: leadData.countryCode }),
                     ...(leadData.email !== undefined && { email: leadData.email }),
                     ...(leadData.source && { source: leadData.source }),
-                    ...(leadData.value !== undefined && { value: parseFloat(leadData.value) }),
+                    ...(leadData.service !== undefined && { service: leadData.service }),
+                    ...(leadData.value !== undefined && { value: leadData.value ? parseFloat(leadData.value) : null }),
+                    ...(leadData.currency !== undefined && { currency: leadData.currency }),
                     ...(leadData.status && { status: leadData.status }),
                     ...(leadData.notes !== undefined && { notes: leadData.notes }),
                     ...(leadData.salespersonId !== undefined && { salespersonId: leadData.salespersonId }),
@@ -1280,9 +1289,12 @@ class LeadService {
             const changes = this.getChangedFields(existingLead, updatedLead, [
                 'name',
                 'phone',
+                'countryCode',
                 'email',
                 'source',
+                'service',
                 'value',
+                'currency',
                 'status',
                 'notes',
                 'salespersonId',
@@ -1507,7 +1519,7 @@ class LeadService {
     }
 
     // Update lead status
-    async updateStatus(leadId, status, companyId, actorUserId = null, actorRole = null) {
+    async updateStatus(leadId, status, note, companyId, actorUserId = null, actorRole = null) {
         try {
             // First verify the lead belongs to the company
             const existingLead = await prisma.lead.findFirst({
@@ -1526,12 +1538,19 @@ class LeadService {
                 throw new Error('You can update status only for your own leads');
             }
 
+            let nextNotes = existingLead.notes;
+            const now = new Date();
+            const formattedDate = `${now.toLocaleDateString()} ${now.toLocaleTimeString()}`;
+            const formattedNote = `[${formattedDate}] Status changed to ${status}: ${note}`;
+            nextNotes = existingLead.notes ? `${existingLead.notes}\n\n${formattedNote}` : formattedNote;
+
             const updatedLead = await prisma.lead.update({
                 where: {
                     id: leadId,
                 },
                 data: {
                     status: status,
+                    notes: nextNotes
                 },
                 include: {
                     salesperson: {
@@ -1556,6 +1575,7 @@ class LeadService {
                             from: existingLead.status,
                             to: updatedLead.status,
                         },
+                        note: note,
                     },
                 });
             }
@@ -1953,7 +1973,7 @@ class LeadService {
         };
     }
 
-    async decideExtensionRequest({ taskId, decision, companyId, actorUserId }) {
+    async decideExtensionRequest({ taskId, decision, note, companyId, actorUserId }) {
         await this.expirePendingExtensionTasks(companyId);
 
         const actor = await prisma.user.findFirst({
@@ -2035,7 +2055,7 @@ class LeadService {
                 where: { id: task.id },
                 data: {
                     status: 'Completed',
-                    notes: `${task.notes || ''}\nDecision: ${decision.toUpperCase()} by ${actor.fullName} on ${nowIso}`,
+                    notes: `${task.notes || ''}\nDecision: ${decision.toUpperCase()} by ${actor.fullName} on ${nowIso}\nNote: ${note}`,
                 },
             });
 
@@ -2056,6 +2076,7 @@ class LeadService {
                             taskId: task.id,
                             justification,
                             closurePlan,
+                            note,
                         },
                     },
                 });
@@ -2072,6 +2093,7 @@ class LeadService {
                             requesterId: requester.id,
                             requesterName: requester.fullName,
                             taskId: task.id,
+                            note,
                         },
                     },
                 });
@@ -2211,7 +2233,7 @@ class LeadService {
         });
     }
 
-    async decideClaimRequest({ taskId, decision, companyId, actorUserId }) {
+    async decideClaimRequest({ taskId, decision, note, companyId, actorUserId }) {
         await this.expirePendingClaimTasks(companyId);
 
         const actor = await prisma.user.findFirst({
@@ -2337,7 +2359,7 @@ class LeadService {
                     where: { id: task.id },
                     data: {
                         status: 'Completed',
-                        notes: `${task.notes || ''}\nDecision: APPROVED by ${actor.fullName} on ${nowIsoString}`,
+                        notes: `${task.notes || ''}\nDecision: APPROVED by ${actor.fullName} on ${nowIsoString}\nNote: ${note}`,
                     },
                 });
 
@@ -2370,6 +2392,7 @@ class LeadService {
                             requesterId: requester.id,
                             requesterName: requester.fullName,
                             taskId: task.id,
+                            note,
                             autoRejectedTaskIds: autoRejectedTasks.map((item) => item.id),
                         },
                     },
@@ -2461,7 +2484,7 @@ class LeadService {
                     where: { id: task.id },
                     data: {
                         status: 'Completed',
-                        notes: `${task.notes || ''}\nDecision: REJECTED by ${actor.fullName} on ${nowIsoString}`,
+                        notes: `${task.notes || ''}\nDecision: REJECTED by ${actor.fullName} on ${nowIsoString}\nNote: ${note}`,
                     },
                 });
 
@@ -2480,6 +2503,7 @@ class LeadService {
                             currentOwnerId: lead.salespersonId ?? null,
                             currentOwnerName: previousOwner?.fullName ?? null,
                             taskId: task.id,
+                            note,
                         },
                     },
                 });
@@ -2499,7 +2523,7 @@ class LeadService {
         };
     }
 
-    async decideApprovalRequest({ taskId, decision, companyId, actorUserId }) {
+    async decideApprovalRequest({ taskId, decision, note, companyId, actorUserId }) {
         const task = await prisma.task.findFirst({
             where: {
                 id: taskId,
@@ -2522,10 +2546,107 @@ class LeadService {
             || (task.title?.toLowerCase().includes('extension request') ? REQUEST_TYPE_EXTENSION : REQUEST_TYPE_CLAIM);
 
         if (requestType === REQUEST_TYPE_EXTENSION) {
-            return this.decideExtensionRequest({ taskId, decision, companyId, actorUserId });
+            return this.decideExtensionRequest({ taskId, decision, note, companyId, actorUserId });
         }
 
-        return this.decideClaimRequest({ taskId, decision, companyId, actorUserId });
+        return this.decideClaimRequest({ taskId, decision, note, companyId, actorUserId });
+    }
+
+    async getDocuments(leadId, companyId, documentType) {
+        const lead = await prisma.lead.findFirst({
+            where: { id: leadId, companyId },
+        });
+
+        if (!lead) throw new Error('Lead not found');
+
+        const params = { leadId };
+        if (documentType) {
+            params.documentType = documentType;
+        }
+
+        return prisma.leadDocument.findMany({
+            where: params,
+            include: {
+                uploader: { select: { id: true, fullName: true, email: true } },
+            },
+            orderBy: [{ documentType: 'asc' }, { version: 'desc' }],
+        });
+    }
+
+    async uploadDocuments({ leadId, companyId, documentType, files, uploadedBy }) {
+        const lead = await prisma.lead.findFirst({
+            where: { id: leadId, companyId },
+        });
+
+        if (!lead) throw new Error('Lead not found');
+
+        const existingDocs = await prisma.leadDocument.findMany({
+            where: { leadId, documentType },
+            orderBy: { version: 'desc' },
+            take: 1
+        });
+
+        let nextVersion = existingDocs.length > 0 ? existingDocs[0].version + 1 : 1;
+
+        const uploadedDocs = [];
+        for (const file of files) {
+            const doc = await prisma.leadDocument.create({
+                data: {
+                    leadId,
+                    documentType,
+                    version: nextVersion,
+                    filename: file.filename,
+                    originalName: file.originalname,
+                    path: file.path.replace(/\\/g, '/'),
+                    mimetype: file.mimetype,
+                    size: file.size,
+                    uploadedBy,
+                }
+            });
+            uploadedDocs.push(doc);
+        }
+
+        await prisma.leadAuditLog.create({
+            data: {
+                leadId,
+                companyId,
+                actorUserId: uploadedBy,
+                action: 'DOCUMENT_UPLOAD',
+                message: `Uploaded ${files.length} document(s) for ${documentType}`,
+                changes: {
+                    documentType,
+                    count: files.length,
+                    files: uploadedDocs.map(d => ({
+                        id: d.id,
+                        name: d.originalName,
+                        version: d.version
+                    })),
+                }
+            }
+        });
+
+        return uploadedDocs;
+    }
+
+    async deleteDocument(leadId, documentId, companyId) {
+        const lead = await prisma.lead.findFirst({ where: { id: leadId, companyId } });
+        if (!lead) throw new Error('Lead not found');
+
+        const doc = await prisma.leadDocument.findFirst({
+            where: { id: documentId, leadId }
+        });
+
+        if (!doc) throw new Error('Document not found');
+
+        try {
+            const fs = require('fs');
+            if (fs.existsSync(doc.path)) fs.unlinkSync(doc.path);
+        } catch (e) {
+            console.error('Failed to delete physical file:', e);
+        }
+
+        await prisma.leadDocument.delete({ where: { id: documentId } });
+        return { success: true };
     }
 }
 
