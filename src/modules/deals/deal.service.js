@@ -165,6 +165,10 @@ class DealService {
                 throw new Error('Deal not found');
             }
 
+            if (dealData.stage === 'Won' && existingDeal.complianceStatus !== 'HEAD_APPROVED') {
+                throw new Error('Cannot mark deal as "Won". All mandatory compliance documents must be submitted and approved.');
+            }
+
             const updatedDeal = await prisma.deal.update({
                 where: {
                     id: dealId,
@@ -235,6 +239,189 @@ class DealService {
         } catch (error) {
             throw new Error(`Error deleting deal: ${error.message}`);
         }
+    }
+
+    async uploadDocuments({ dealId, companyId, documentType, files, uploadedBy }) {
+        const deal = await prisma.deal.findFirst({
+            where: { id: dealId, companyId },
+        });
+
+        if (!deal) throw new Error('Deal not found');
+
+        const uploadedDocs = [];
+        for (const file of files) {
+            const doc = await prisma.dealDocument.create({
+                data: {
+                    dealId,
+                    documentType,
+                    filename: file.filename,
+                    originalName: file.originalname,
+                    path: file.path.replace(/\\/g, '/'),
+                    mimetype: file.mimetype,
+                    size: file.size,
+                    uploadedBy,
+                }
+            });
+            uploadedDocs.push(doc);
+        }
+
+        return uploadedDocs;
+    }
+
+    async getDocuments(dealId, companyId, documentType) {
+        return await prisma.dealDocument.findMany({
+            where: {
+                dealId,
+                deal: { companyId },
+                ...(documentType && { documentType })
+            },
+            include: {
+                uploader: { select: { id: true, fullName: true, email: true } },
+            },
+            orderBy: { createdAt: 'desc' },
+        });
+    }
+
+    async deleteDocument(dealId, documentId, companyId) {
+        const deal = await prisma.deal.findFirst({ where: { id: dealId, companyId } });
+        if (!deal) throw new Error('Deal not found');
+
+        const doc = await prisma.dealDocument.findFirst({
+            where: { id: documentId, dealId }
+        });
+
+        if (!doc) throw new Error('Document not found');
+
+        try {
+            const fs = require('fs');
+            if (fs.existsSync(doc.path)) fs.unlinkSync(doc.path);
+        } catch (e) {
+            console.error('Failed to delete physical file:', e);
+        }
+
+        await prisma.dealDocument.delete({ where: { id: documentId } });
+        return { success: true };
+    }
+
+    async submitCompliance(dealId, companyId, userId) {
+        const deal = await prisma.deal.findFirst({
+            where: { id: dealId, companyId },
+            include: { documents: true }
+        });
+
+        if (!deal) throw new Error('Deal not found');
+
+        const requiredDocs = ["Final SOW", "Client Approved BOQ", "Advance Payment Proof", "Signed MSA", "Signed NDA"];
+        const uploadedTypes = new Set(deal.documents.map(d => d.documentType));
+        const missing = requiredDocs.filter(reqDoc => !uploadedTypes.has(reqDoc));
+
+        if (missing.length > 0) {
+            throw new Error(`Missing mandatory documents: ${missing.join(', ')}`);
+        }
+
+        if (deal.complianceStatus !== 'PENDING' && deal.complianceStatus !== 'REJECTED') {
+            throw new Error(`Compliance flow is already in progress or completed (${deal.complianceStatus}).`);
+        }
+
+        const deadline = new Date(Date.now() + 24 * 60 * 60 * 1000);
+        await prisma.dealApproval.create({
+            data: {
+                dealId,
+                level: 'TL_VERIFICATION',
+                deadline
+            }
+        });
+
+        await prisma.deal.update({
+            where: { id: dealId },
+            data: { complianceStatus: 'TL_VERIFICATION_PENDING' }
+        });
+
+        return { message: 'Compliance flow submitted to TL Verification' };
+    }
+
+    async approveCompliance({ dealId, companyId, userId, level, action, comments }) {
+        const deal = await prisma.deal.findFirst({
+            where: { id: dealId, companyId }
+        });
+
+        if (!deal) throw new Error('Deal not found');
+
+        const approval = await prisma.dealApproval.findFirst({
+            where: {
+                dealId,
+                level,
+                status: 'PENDING'
+            }
+        });
+
+        if (!approval) throw new Error(`No pending approval found for level ${level}`);
+
+        await prisma.dealApproval.update({
+            where: { id: approval.id },
+            data: {
+                status: action,
+                approverId: userId,
+                comments: comments || null
+            }
+        });
+
+        if (action === 'REJECTED') {
+            await prisma.deal.update({
+                where: { id: dealId },
+                data: { complianceStatus: 'REJECTED' }
+            });
+            return { nextStatus: 'REJECTED' };
+        }
+
+        let nextLevel = null;
+        let nextComplianceStatus = '';
+
+        if (level === 'TL_VERIFICATION') {
+            nextLevel = 'FINANCE_CONFIRMATION';
+            nextComplianceStatus = 'FINANCE_PENDING';
+        } else if (level === 'FINANCE_CONFIRMATION') {
+            nextLevel = 'HEAD_APPROVAL';
+            nextComplianceStatus = 'HEAD_PENDING';
+        }
+
+        if (nextLevel) {
+            const deadline = new Date(Date.now() + 24 * 60 * 60 * 1000);
+            await prisma.dealApproval.create({
+                data: {
+                    dealId,
+                    level: nextLevel,
+                    deadline
+                }
+            });
+            await prisma.deal.update({
+                where: { id: dealId },
+                data: { complianceStatus: nextComplianceStatus }
+            });
+            return { nextStatus: nextComplianceStatus };
+        }
+
+        let projectId = `PRJ-${Math.floor(100000 + Math.random() * 900000)}`;
+
+        await prisma.project.create({
+            data: {
+                projectId,
+                name: `${deal.title} - Project Workspace`,
+                dealId: deal.id,
+                companyId: companyId
+            }
+        });
+
+        const updatedDeal = await prisma.deal.update({
+            where: { id: dealId },
+            data: {
+                complianceStatus: 'HEAD_APPROVED',
+                stage: 'Won',
+                projectGenerated: true
+            }
+        });
+
+        return { nextStatus: 'HEAD_APPROVED', deal: updatedDeal, projectId };
     }
 }
 
