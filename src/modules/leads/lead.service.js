@@ -1544,13 +1544,27 @@ class LeadService {
             const formattedNote = `[${formattedDate}] Status changed to ${status}: ${note}`;
             nextNotes = existingLead.notes ? `${existingLead.notes}\n\n${formattedNote}` : formattedNote;
 
+            if (status === 'Won' && existingLead.status !== 'Won') {
+                const docs = await prisma.leadDocument.findMany({
+                    where: { leadId }
+                });
+                const requiredDocs = ["Initial SOW", "Client BOQ", "Payment Proofs", "Signed MSA", "Signed NDA"];
+                const uploadedTypes = new Set(docs.map(d => d.documentType));
+                const missing = requiredDocs.filter(reqDoc => !uploadedTypes.has(reqDoc));
+
+                if (missing.length > 0) {
+                    throw new Error(`Cannot set status to "Won". Mandatory documents missing: ${missing.join(', ')}`);
+                }
+            }
+
             const updatedLead = await prisma.lead.update({
                 where: {
                     id: leadId,
                 },
                 data: {
                     status: status,
-                    notes: nextNotes
+                    notes: nextNotes,
+                    ...(status === 'Won' && existingLead.complianceStatus === 'NA' && { complianceStatus: 'PENDING' })
                 },
                 include: {
                     salesperson: {
@@ -2647,6 +2661,185 @@ class LeadService {
 
         await prisma.leadDocument.delete({ where: { id: documentId } });
         return { success: true };
+    }
+
+    async submitLeadCompliance(leadId, companyId, userId) {
+        const lead = await prisma.lead.findFirst({
+            where: { id: leadId, companyId },
+            include: { documents: true }
+        });
+
+        if (!lead) throw new Error('Lead not found');
+        if (lead.status !== 'Won') throw new Error('Lead must be in "Won" status to submit compliance');
+
+        const requiredDocs = ["Initial SOW", "Client BOQ", "Payment Proofs", "Signed MSA", "Signed NDA"];
+        const uploadedTypes = new Set(lead.documents.map(d => d.documentType));
+        const missing = requiredDocs.filter(reqDoc => !uploadedTypes.has(reqDoc));
+
+        if (missing.length > 0) {
+            throw new Error(`Missing mandatory documents: ${missing.join(', ')}`);
+        }
+
+        if (lead.complianceStatus !== 'PENDING' && lead.complianceStatus !== 'REJECTED' && lead.complianceStatus !== 'NA') {
+            throw new Error(`Compliance flow is already in progress or completed (${lead.complianceStatus}).`);
+        }
+
+        const deadline = new Date(Date.now() + 24 * 60 * 60 * 1000);
+        await prisma.leadApproval.create({
+            data: {
+                leadId,
+                level: 'TL_VERIFICATION',
+                deadline
+            }
+        });
+
+        await prisma.lead.update({
+            where: { id: leadId },
+            data: { complianceStatus: 'TL_VERIFICATION' }
+        });
+
+        await this.createAuditLog({
+            leadId,
+            companyId,
+            actorUserId: userId,
+            action: 'UPDATE',
+            message: 'Lead compliance submitted for TL Verification',
+            changes: { complianceStatus: { from: lead.complianceStatus, to: 'TL_VERIFICATION' } }
+        });
+
+        return { message: 'Compliance flow submitted to TL Verification' };
+    }
+
+    async approveLeadCompliance({ leadId, companyId, userId, level, action, comments }) {
+        const lead = await prisma.lead.findFirst({
+            where: { id: leadId, companyId }
+        });
+
+        if (!lead) throw new Error('Lead not found');
+
+        const approval = await prisma.leadApproval.findFirst({
+            where: {
+                leadId,
+                level,
+                status: 'PENDING'
+            }
+        });
+
+        if (!approval) throw new Error(`No pending approval found for level ${level}`);
+
+        await prisma.leadApproval.update({
+            where: { id: approval.id },
+            data: {
+                status: action,
+                approverId: userId,
+                comments: comments || null
+            }
+        });
+
+        if (action === 'REJECTED') {
+            await prisma.lead.update({
+                where: { id: leadId },
+                data: { complianceStatus: 'REJECTED' }
+            });
+
+            await this.createAuditLog({
+                leadId,
+                companyId,
+                actorUserId: userId,
+                action: 'UPDATE',
+                message: `Lead compliance rejected at level ${level}`,
+                changes: { complianceStatus: { from: lead.complianceStatus, to: 'REJECTED' }, comments }
+            });
+
+            return { nextStatus: 'REJECTED' };
+        }
+
+        let nextLevel = null;
+        let nextComplianceStatus = '';
+
+        if (level === 'TL_VERIFICATION') {
+            nextLevel = 'HEAD_APPROVAL';
+            nextComplianceStatus = 'HEAD_APPROVAL';
+        }
+
+        if (nextLevel) {
+            const deadline = new Date(Date.now() + 24 * 60 * 60 * 1000);
+            await prisma.leadApproval.create({
+                data: {
+                    leadId,
+                    level: nextLevel,
+                    deadline
+                }
+            });
+            await prisma.lead.update({
+                where: { id: leadId },
+                data: { complianceStatus: nextComplianceStatus }
+            });
+
+            await this.createAuditLog({
+                leadId,
+                companyId,
+                actorUserId: userId,
+                action: 'UPDATE',
+                message: `Lead compliance approved at level ${level}. Moving to ${nextLevel}.`,
+                changes: { complianceStatus: { from: lead.complianceStatus, to: nextComplianceStatus }, comments }
+            });
+
+            return { nextStatus: nextComplianceStatus };
+        }
+
+        // Final approval
+        const updatedLead = await prisma.lead.update({
+            where: { id: leadId },
+            data: {
+                complianceStatus: 'APPROVED',
+            }
+        });
+
+        await this.createAuditLog({
+            leadId,
+            companyId,
+            actorUserId: userId,
+            action: 'UPDATE',
+            message: 'Lead compliance fully approved.',
+            changes: { complianceStatus: { from: lead.complianceStatus, to: 'APPROVED' }, comments }
+        });
+
+        return { nextStatus: 'APPROVED', lead: updatedLead };
+    }
+
+    async getPendingApprovals(companyId, userId, role) {
+        const normalizedRole = normalizeRole(role);
+        let statusFilter = [];
+
+        if (normalizedRole === EMPLOYEE_ROLES.TEAM_LEADER) {
+            statusFilter = ['TL_VERIFICATION'];
+        } else if (normalizedRole === EMPLOYEE_ROLES.HEAD_OF_DEPARTMENT) {
+            statusFilter = ['HEAD_APPROVAL'];
+        } else if (normalizedRole === EMPLOYEE_ROLES.COMPANY_ADMIN) {
+            statusFilter = ['TL_VERIFICATION', 'HEAD_APPROVAL'];
+        } else {
+            return []; // Other roles don't see approvals
+        }
+
+        const leads = await prisma.lead.findMany({
+            where: {
+                companyId,
+                complianceStatus: { in: statusFilter }
+            },
+            include: {
+                salesperson: {
+                    select: { id: true, fullName: true, email: true }
+                },
+                approvals: {
+                    orderBy: { createdAt: 'desc' }
+                },
+                documents: true
+            },
+            orderBy: { updatedAt: 'desc' }
+        });
+
+        return leads;
     }
 }
 

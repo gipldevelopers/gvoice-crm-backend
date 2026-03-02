@@ -48,6 +48,7 @@ model User {
   deals      Deal[]   @relation("AssignedDeals")
   dealDocuments DealDocument[]
   dealApprovals DealApproval[]
+  leadApprovals LeadApproval[]
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
@@ -93,10 +94,30 @@ model Lead {
   auditLogs      LeadAuditLog[]
   documents      LeadDocument[]
 
+  complianceStatus String @default("NA") // NA, PENDING, TL_VERIFICATION, HEAD_APPROVAL, APPROVED, REJECTED
+  approvals      LeadApproval[]
+
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
   @@map("leads")
+}
+
+model LeadApproval {
+  id            String   @id @default(uuid())
+  leadId        String
+  lead          Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  level         String   // "TL_VERIFICATION", "HEAD_APPROVAL"
+  status        String   @default("PENDING") // PENDING, APPROVED, REJECTED
+  approverId    String?
+  approver      User?    @relation(fields: [approverId], references: [id], onDelete: SetNull)
+  comments      String?  @db.Text
+  deadline      DateTime // TAT 24 hours
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  
+  @@index([leadId, level])
+  @@map("lead_approvals")
 }
 
 model LeadAuditLog {

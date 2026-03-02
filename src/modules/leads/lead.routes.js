@@ -15,6 +15,7 @@ router.get('/', leadController.getAllLeads);
 // Get claim request activities for current user
 router.get('/claim-activities', leadController.getClaimActivities);
 router.get('/approval-activities', leadController.getApprovalActivities);
+router.get('/pending-approvals', leadController.getPendingApprovals);
 router.post('/dev/email-test', leadController.sendDevEmailTemplate);
 
 // Get lead statistics
@@ -49,5 +50,9 @@ router.patch('/:id/status', leadController.updateStatus);
 router.get('/:id/documents', leadController.getDocuments);
 router.post('/:id/documents', leadDocumentUpload.array('files'), leadController.uploadDocuments);
 router.delete('/:id/documents/:documentId', leadController.deleteDocument);
+
+// Compliance
+router.post('/:id/compliance/submit', leadController.submitCompliance);
+router.post('/:id/compliance/approve', leadController.approveCompliance);
 
 module.exports = router;

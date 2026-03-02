@@ -589,6 +589,88 @@ class LeadController {
             });
         }
     }
+
+    async submitCompliance(req, res) {
+        try {
+            const { id } = req.params;
+            const companyId = req.user.companyId;
+            const userId = req.user.id;
+
+            const result = await leadService.submitLeadCompliance(id, companyId, userId);
+
+            return res.status(200).json({
+                success: true,
+                message: 'Compliance flow started successfully',
+                data: result
+            });
+        } catch (error) {
+            console.error('Error submitting lead compliance:', error);
+            return res.status(500).json({
+                success: false,
+                message: error.message || 'Error submitting compliance',
+            });
+        }
+    }
+
+    async approveCompliance(req, res) {
+        try {
+            const { id } = req.params;
+            const { level, action, comments } = req.body;
+            const companyId = req.user.companyId;
+            const userId = req.user.id;
+
+            if (!level || !action) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Level and action are required',
+                });
+            }
+
+            const result = await leadService.approveLeadCompliance({
+                leadId: id,
+                companyId,
+                userId,
+                level,
+                action,
+                comments
+            });
+
+            return res.status(200).json({
+                success: true,
+                message: `Compliance ${action.toLowerCase()} successfully`,
+                data: result
+            });
+        } catch (error) {
+            console.error('Error approving lead compliance:', error);
+            return res.status(500).json({
+                success: false,
+                message: error.message || 'Error approving compliance',
+            });
+        }
+    }
+
+    async getPendingApprovals(req, res) {
+        try {
+            const companyId = req.user.companyId;
+            const userId = req.user.id;
+            const role = req.user.role;
+
+            const leads = await leadService.getPendingApprovals(companyId, userId, role);
+
+            return res.status(200).json({
+                success: true,
+                message: 'Pending approvals fetched successfully',
+                data: leads,
+                count: leads.length
+            });
+        } catch (error) {
+            console.error('Error fetching pending approvals:', error);
+            return res.status(500).json({
+                success: false,
+                message: error.message || 'Error fetching pending approvals',
+            });
+        }
+    }
 }
 
 module.exports = new LeadController();
