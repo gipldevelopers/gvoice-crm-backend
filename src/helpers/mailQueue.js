@@ -45,6 +45,10 @@ const createTransporter = () => nodemailer.createTransport({
         user: process.env.SMTP_USER,
         pass: process.env.SMTP_PASS,
     },
+    pool: true, // Reuse connections
+    maxConnections: 5,
+    maxMessages: 100,
+    connectionTimeout: 10000,
 });
 
 /**
@@ -91,11 +95,12 @@ const addEmailJob = async (data, delayInMinutes = 0, options = {}) => {
 const startEmailWorker = () => {
     if (workerInstance) return workerInstance;
 
+    const transporter = createTransporter();
+
     workerInstance = new Worker(
         'email-queue',
         async (job) => {
             const { to, subject, html, text, from } = job.data;
-            const transporter = createTransporter();
 
             const info = await transporter.sendMail({
                 from: from || process.env.SMTP_FROM,
@@ -110,7 +115,7 @@ const startEmailWorker = () => {
         },
         {
             connection: redisConnection,
-            concurrency: parseInt(process.env.EMAIL_QUEUE_CONCURRENCY || '5', 10),
+            concurrency: parseInt(process.env.EMAIL_QUEUE_CONCURRENCY || '10', 10),
         }
     );
 

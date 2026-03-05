@@ -140,6 +140,72 @@ const claimApprovedOwnershipTemplate = ({ leadName, recipientName, previousOwner
     };
 };
 
+const leadQualifiedApprovalRequestTemplate = ({ leadName, ownerName, approverName, approvalDeadlineAt }) => {
+    const subject = `Approval required: Lead "${leadName}" to Qualified status`;
+    const text = [
+        `Hi ${approverName || 'Approver'},`,
+        '',
+        `${ownerName || 'An employee'} has requested to change the status of lead "${leadName}" to Qualified.`,
+        'This status change requires your approval.',
+        `Approval window closes at: ${formatDateTime(approvalDeadlineAt)}.`,
+    ].join('\n');
+
+    return {
+        subject,
+        text,
+        html: asHtml('Lead Qualified Approval Needed', [
+            `Hi ${approverName || 'Approver'},`,
+            `<strong>${ownerName || 'An employee'}</strong> has requested to change the status of lead "<strong>${leadName}</strong>" to <strong>Qualified</strong>.`,
+            'This status change requires your approval.',
+            `Approval window closes at: <strong>${formatDateTime(approvalDeadlineAt)}</strong>.`,
+        ]),
+    };
+};
+
+const newLeadCreatedTemplate = ({ leadName, creatorName, approverName }) => {
+    const subject = `New Lead Created: ${leadName}`;
+    const text = [
+        `Hi ${approverName || 'Leader'},`,
+        '',
+        `A new lead "${leadName}" has been created by ${creatorName || 'a user'}.`,
+        'The status of this lead is currently "New".',
+    ].join('\n');
+
+    return {
+        subject,
+        text,
+        html: asHtml('New Lead Created', [
+            `Hi ${approverName || 'Leader'},`,
+            `A new lead "<strong>${leadName}</strong>" has been created by <strong>${creatorName || 'a user'}</strong>.`,
+            'The status of this lead is currently <strong>"New"</strong>.',
+        ]),
+    };
+};
+
+const leadQualifiedStatusDecisionTemplate = ({ leadName, ownerName, approverName, decision, note }) => {
+    const isApproved = decision.toLowerCase() === 'approve';
+    const statusText = isApproved ? 'Approved' : 'Rejected';
+    const subject = `Status change request ${statusText.toLowerCase()}: Lead "${leadName}"`;
+    const text = [
+        `Hi ${ownerName || 'User'},`,
+        '',
+        `Your request to change the status of lead "${leadName}" to Qualified has been ${statusText.toLowerCase()} by ${approverName || 'a manager'}.`,
+        isApproved ? 'The lead is now in Qualified status.' : 'The lead remains in its previous status.',
+        note ? `\nManager Note: ${note}` : '',
+    ].join('\n');
+
+    return {
+        subject,
+        text,
+        html: asHtml(`Lead Status Change ${statusText}`, [
+            `Hi ${ownerName || 'User'},`,
+            `Your request to change the status of lead "<strong>${leadName}</strong>" to <strong>Qualified</strong> has been <strong>${statusText.toLowerCase()}</strong> by <strong>${approverName || 'a manager'}</strong>.`,
+            isApproved ? 'The lead is now in <strong>Qualified</strong> status.' : 'The lead remains in its previous status.',
+            note ? `<div style="margin-top: 15px; padding: 10px; background-color: #f3f4f6; border-radius: 4px; border-left: 4px solid #3b82f6;"><strong>Manager Note:</strong> ${note}</div>` : '',
+        ]),
+    };
+};
+
 module.exports = {
     leadOpenWarning1DayTemplate,
     leadNowOpenTemplate,
@@ -147,4 +213,7 @@ module.exports = {
     claimRequestedToApproverUrgentTemplate,
     claimExpiredReopenedTemplate,
     claimApprovedOwnershipTemplate,
+    leadQualifiedApprovalRequestTemplate,
+    leadQualifiedStatusDecisionTemplate,
+    newLeadCreatedTemplate,
 };

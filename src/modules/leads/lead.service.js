@@ -8,6 +8,9 @@ const {
     claimRequestedToApproverUrgentTemplate,
     claimExpiredReopenedTemplate,
     claimApprovedOwnershipTemplate,
+    leadQualifiedApprovalRequestTemplate,
+    leadQualifiedStatusDecisionTemplate,
+    newLeadCreatedTemplate,
 } = require('../../helpers/leadEmailTemplates');
 
 const LEAD_TIMER_DAYS = 15;
@@ -20,6 +23,7 @@ const LEAD_OPEN_WARNING_1D_SENT_ACTION = 'LEAD_OPEN_WARNING_1D_SENT';
 const LEAD_OPEN_FOR_EVERYONE_SENT_ACTION = 'LEAD_OPEN_FOR_EVERYONE_SENT';
 const REQUEST_TYPE_CLAIM = 'LEAD_CLAIM';
 const REQUEST_TYPE_EXTENSION = 'LEAD_EXTENSION';
+const REQUEST_TYPE_QUALIFIED = 'LEAD_QUALIFIED_APPROVAL';
 const LEAD_WIN_PROBABILITY = {
     New: 10,
     Contacted: 25,
@@ -52,6 +56,7 @@ class LeadService {
         const normalized = String(value).trim().toUpperCase();
         if (normalized === REQUEST_TYPE_EXTENSION) return REQUEST_TYPE_EXTENSION;
         if (normalized === REQUEST_TYPE_CLAIM) return REQUEST_TYPE_CLAIM;
+        if (normalized === REQUEST_TYPE_QUALIFIED) return REQUEST_TYPE_QUALIFIED;
         return null;
     }
 
@@ -85,6 +90,37 @@ class LeadService {
     extractApproverIdFromNotes(notes = '') {
         const value = this.extractValueFromNotesByLabel(notes, 'Approver ID');
         return value && value.toLowerCase() !== 'none' ? value : null;
+    }
+
+    async notifyManagerOnLeadCreation(lead, companyId, actorUserId) {
+        try {
+            if (!actorUserId) return;
+            const creator = await prisma.user.findFirst({
+                where: { id: actorUserId, companyId },
+                select: {
+                    id: true,
+                    fullName: true,
+                    reportsTo: {
+                        select: { id: true, fullName: true, email: true }
+                    }
+                }
+            });
+
+            if (creator?.reportsTo?.email) {
+                await this.queueEmailSafe({
+                    to: creator.reportsTo.email,
+                    templateBuilder: newLeadCreatedTemplate,
+                    templateParams: {
+                        leadName: lead.name,
+                        creatorName: creator.fullName,
+                        approverName: creator.reportsTo.fullName,
+                    },
+                    jobId: this.buildSafeJobId(['new-lead-notification', lead.id]),
+                });
+            }
+        } catch (error) {
+            console.error('[LeadService] notifyManagerOnLeadCreation error:', error.message);
+        }
     }
 
     async queueEmailSafe({ to, templateBuilder, templateParams, delayInMinutes = 0, jobId = null }) {
@@ -988,7 +1024,7 @@ class LeadService {
                     },
                 },
             });
-            await this.createAuditLog({
+            this.createAuditLog({
                 leadId: lead.id,
                 companyId,
                 actorUserId: actorUserId || defaultSalespersonId || null,
@@ -1006,7 +1042,13 @@ class LeadService {
                     status: lead.status,
                     salespersonId: lead.salespersonId,
                 },
-            });
+            }).catch(err => console.error('[LeadService] createLead audit log failed:', err.message));
+
+            // Send notification to manager in background
+            if (actorUserId) {
+                this.notifyManagerOnLeadCreation(lead, companyId, actorUserId);
+            }
+
             return this.attachLeadTimerData(lead);
         } catch (error) {
             throw new Error(`Error creating lead: ${error.message}`);
@@ -1071,6 +1113,7 @@ class LeadService {
                     OR: [
                         { title: { contains: 'Claim request', mode: 'insensitive' } },
                         { title: { contains: 'Extension request', mode: 'insensitive' } },
+                        { title: { contains: 'Qualified Status Approval', mode: 'insensitive' } },
                     ],
                 },
                 orderBy: { createdAt: 'desc' },
@@ -1206,6 +1249,7 @@ class LeadService {
                         OR: [
                             { title: { contains: 'Claim request', mode: 'insensitive' } },
                             { title: { contains: 'Extension request', mode: 'insensitive' } },
+                            { title: { contains: 'Qualified Status Approval', mode: 'insensitive' } },
                         ],
                     },
                     orderBy: { createdAt: 'desc' },
@@ -1271,7 +1315,6 @@ class LeadService {
                     ...(leadData.service !== undefined && { service: leadData.service }),
                     ...(leadData.value !== undefined && { value: leadData.value ? parseFloat(leadData.value) : null }),
                     ...(leadData.currency !== undefined && { currency: leadData.currency }),
-                    ...(leadData.status && { status: leadData.status }),
                     ...(leadData.notes !== undefined && { notes: leadData.notes }),
                     ...(leadData.salespersonId !== undefined && { salespersonId: leadData.salespersonId }),
                 },
@@ -1535,7 +1578,83 @@ class LeadService {
 
             const canUpdateStatus = isCompanyAdminRole(actorRole) || existingLead.salespersonId === actorUserId;
             if (!canUpdateStatus) {
-                throw new Error('You can update status only for your own leads');
+                throw new Error('Only the user who created/owns the lead can change the lead status');
+            }
+
+            // Handle Qualified status approval for employees
+            if (status === 'Qualified' && normalizeRole(actorRole) === EMPLOYEE_ROLES.EMPLOYEE) {
+                const requester = await prisma.user.findFirst({
+                    where: { id: actorUserId, companyId },
+                    select: { id: true, fullName: true, email: true, reportsToId: true }
+                });
+
+                if (!requester?.reportsToId) {
+                    throw new Error('No manager found to approve your status change request');
+                }
+
+                const manager = await prisma.user.findFirst({
+                    where: { id: requester.reportsToId, companyId },
+                    select: { id: true, fullName: true, email: true }
+                });
+
+                if (!manager) {
+                    throw new Error('Manager not found');
+                }
+
+                const approvalDeadline = new Date(Date.now() + (CLAIM_APPROVAL_WINDOW_HOURS * 60 * 60 * 1000));
+                const dueTime = `${String(approvalDeadline.getHours()).padStart(2, '0')}:${String(approvalDeadline.getMinutes()).padStart(2, '0')}`;
+
+                const approvalTask = await prisma.task.create({
+                    data: {
+                        title: `Qualified Status Approval for lead: ${existingLead.name}`,
+                        type: 'Email',
+                        linkedType: 'Lead',
+                        linkedId: existingLead.id,
+                        linkedTo: existingLead.name,
+                        assignedTo: manager.fullName,
+                        dueDate: approvalDeadline,
+                        dueTime: dueTime,
+                        status: 'Pending',
+                        priority: 'High',
+                        notes: `Request Type: ${REQUEST_TYPE_QUALIFIED}\nStatus change request to Qualified\nRequester: ${requester.fullName}\nRequester ID: ${requester.id}\nApprover: ${manager.fullName}\nApprover ID: ${manager.id}\nApproval Window: ${CLAIM_APPROVAL_WINDOW_HOURS}h\nProposed Note: ${note}`,
+                        companyId: companyId,
+                    },
+                });
+
+                await this.createAuditLog({
+                    leadId,
+                    companyId,
+                    actorUserId,
+                    action: 'STATUS_CHANGE_REQUEST',
+                    message: `Requested status change to Qualified. Pending approval by ${manager.fullName}`,
+                    changes: {
+                        proposedStatus: 'Qualified',
+                        requestedToUserId: manager.id,
+                        requestedToName: manager.fullName,
+                        taskId: approvalTask.id,
+                        note: note
+                    },
+                });
+
+                if (manager.email) {
+                    await this.queueEmailSafe({
+                        to: manager.email,
+                        templateBuilder: leadQualifiedApprovalRequestTemplate,
+                        templateParams: {
+                            leadName: existingLead.name,
+                            ownerName: requester.fullName,
+                            approverName: manager.fullName,
+                            approvalDeadlineAt: approvalDeadline,
+                        },
+                        jobId: this.buildSafeJobId(['qualified-approval-request', approvalTask.id]),
+                    });
+                }
+
+                return {
+                    ...this.attachLeadTimerData(existingLead),
+                    approvalPending: true,
+                    message: `Status change to Qualified requested. Pending approval from ${manager.fullName}`
+                };
             }
 
             let nextNotes = existingLead.notes;
@@ -2173,6 +2292,7 @@ class LeadService {
                 OR: [
                     { title: { contains: 'Claim request', mode: 'insensitive' } },
                     { title: { contains: 'Extension request', mode: 'insensitive' } },
+                    { title: { contains: 'Qualified Status Approval', mode: 'insensitive' } },
                 ],
                 assignedTo: user.fullName
             },
@@ -2219,7 +2339,7 @@ class LeadService {
             const lead = leadMap.get(task.linkedId);
             const requester = requesterMap.get(requesterId);
             const requestType = this.extractRequestTypeFromNotes(task.notes)
-                || (task.title?.toLowerCase().includes('extension request') ? REQUEST_TYPE_EXTENSION : REQUEST_TYPE_CLAIM);
+                || (task.title?.toLowerCase().includes('extension request') ? REQUEST_TYPE_EXTENSION : (task.title?.toLowerCase().includes('qualified status') ? REQUEST_TYPE_QUALIFIED : REQUEST_TYPE_CLAIM));
             return {
                 id: task.id,
                 taskId: task.id,
@@ -2547,6 +2667,7 @@ class LeadService {
                 OR: [
                     { title: { contains: 'Claim request', mode: 'insensitive' } },
                     { title: { contains: 'Extension request', mode: 'insensitive' } },
+                    { title: { contains: 'Qualified Status Approval', mode: 'insensitive' } },
                 ],
             },
             select: { id: true, title: true, notes: true },
@@ -2563,7 +2684,126 @@ class LeadService {
             return this.decideExtensionRequest({ taskId, decision, note, companyId, actorUserId });
         }
 
+        if (requestType === REQUEST_TYPE_QUALIFIED) {
+            return this.decideQualifiedApprovalRequest({ taskId, decision, note, companyId, actorUserId });
+        }
+
         return this.decideClaimRequest({ taskId, decision, note, companyId, actorUserId });
+    }
+
+    async decideQualifiedApprovalRequest({ taskId, decision, note, companyId, actorUserId }) {
+        const actor = await prisma.user.findFirst({
+            where: { id: actorUserId, companyId },
+            select: { id: true, fullName: true },
+        });
+        if (!actor) throw new Error('User not found');
+
+        const task = await prisma.task.findFirst({
+            where: {
+                id: taskId,
+                companyId,
+                linkedType: 'Lead',
+                status: 'Pending',
+                title: { contains: 'Qualified Status Approval', mode: 'insensitive' },
+            },
+        });
+        if (!task) throw new Error('Qualified approval request not found');
+
+        if (task.assignedTo !== actor.fullName) {
+            throw new Error('You are not authorized to decide this approval request');
+        }
+
+        const requesterId = this.extractRequesterIdFromNotes(task.notes);
+        if (!requesterId) throw new Error('Invalid request payload');
+
+        const lead = await prisma.lead.findFirst({
+            where: { id: task.linkedId, companyId },
+        });
+        if (!lead) throw new Error('Lead not found');
+
+        const nowIso = new Date().toISOString();
+        const result = await prisma.$transaction(async (tx) => {
+            const updatedTask = await tx.task.update({
+                where: { id: taskId },
+                data: {
+                    status: 'Completed',
+                    notes: `${task.notes || ''}\nDecision: ${decision.toUpperCase()} by ${actor.fullName} on ${nowIso}\nNote: ${note}`,
+                },
+            });
+
+            if (decision === 'approve') {
+                const formattedDate = `${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString()}`;
+                const formattedNote = `[${formattedDate}] Status changed to Qualified by approval from ${actor.fullName}: ${note}`;
+                const nextNotes = lead.notes ? `${lead.notes}\n\n${formattedNote}` : formattedNote;
+
+                await tx.lead.update({
+                    where: { id: lead.id },
+                    data: {
+                        status: 'Qualified',
+                        notes: nextNotes
+                    },
+                });
+
+                await tx.leadAuditLog.create({
+                    data: {
+                        leadId: lead.id,
+                        companyId,
+                        actorUserId,
+                        action: 'STATUS_CHANGE',
+                        message: `Lead status changed to Qualified via approval by ${actor.fullName}`,
+                        changes: {
+                            status: { from: lead.status, to: 'Qualified' },
+                            note: note,
+                            approvedBy: actor.fullName,
+                        },
+                    },
+                });
+            } else {
+                await tx.leadAuditLog.create({
+                    data: {
+                        leadId: lead.id,
+                        companyId,
+                        actorUserId,
+                        action: 'STATUS_CHANGE_REJECTED',
+                        message: `Status change to Qualified rejected by ${actor.fullName}`,
+                        changes: {
+                            proposedStatus: 'Qualified',
+                            rejectedBy: actor.fullName,
+                            note: note,
+                        },
+                    },
+                });
+            }
+
+            return { updatedTask, requesterId };
+        });
+
+        // Send notification to requester
+        const requester = await prisma.user.findFirst({
+            where: { id: result.requesterId, companyId },
+            select: { email: true, fullName: true }
+        });
+
+        if (requester?.email) {
+            await this.queueEmailSafe({
+                to: requester.email,
+                templateBuilder: leadQualifiedStatusDecisionTemplate,
+                templateParams: {
+                    leadName: lead.name,
+                    ownerName: requester.fullName,
+                    approverName: actor.fullName,
+                    decision,
+                    note: note
+                },
+                jobId: this.buildSafeJobId(['qualified-status-decision', taskId]),
+            });
+        }
+
+        return {
+            task: result.updatedTask,
+            leadId: lead.id,
+            decision,
+        };
     }
 
     async getDocuments(leadId, companyId, documentType) {
@@ -2593,6 +2833,10 @@ class LeadService {
         });
 
         if (!lead) throw new Error('Lead not found');
+
+        if (lead.status !== 'Qualified') {
+            throw new Error('Requirements documents can only be uploaded when lead status is "Qualified"');
+        }
 
         const existingDocs = await prisma.leadDocument.findMany({
             where: { leadId, documentType },
