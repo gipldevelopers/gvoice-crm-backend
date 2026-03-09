@@ -1262,6 +1262,15 @@ class LeadService {
                             name: true,
                         },
                     },
+                    customer: {
+                        include: {
+                            deals: {
+                                include: {
+                                    project: true
+                                }
+                            }
+                        }
+                    },
                     auditLogs: {
                         include: {
                             actorUser: {
