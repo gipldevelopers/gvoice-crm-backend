@@ -1,0 +1,112 @@
+// Test file for Lead API endpoints
+// You can use this with tools like Postman, Insomnia, or REST Client VS Code extension
+
+### Base URL
+@baseUrl = http://localhost:5050/api/leads
+
+### 1. Create a new lead
+POST {{baseUrl}}
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "name": "Rahul Sharma",
+  "phone": "+91 98765 43210",
+  "email": "rahul@tech.com",
+  "source": "Website",
+  "value": 4500,
+  "status": "New",
+  "notes": "Interested in premium plan. Follow up on Monday."
+}
+
+###
+PATCH http://localhost:5050/api/leads/{{leadId}}/extension-request
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "requestedDays": 5,
+  "justification": "Need extra time for final commercial closure and stakeholder alignment.",
+  "closurePlan": "Final demo in 2 days, revised quote in 3 days, closure by day 5."
+}
+
+###
+GET http://localhost:5050/api/leads/approval-activities
+Authorization: Bearer {{token}}
+
+###
+PATCH http://localhost:5050/api/leads/approval-requests/{{taskId}}/decision
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "decision": "approve"
+}
+
+###
+POST http://localhost:5050/api/leads/dev/email-test
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "templateType": "claim_requested_owner",
+  "toEmail": "developer@gohilinfotech.com",
+  "leadName": "QA Test Lead",
+  "requesterName": "QA User",
+  "ownerName": "Lead Owner"
+}
+
+###
+
+### 2. Get all leads
+GET {{baseUrl}}
+Authorization: Bearer {{token}}
+
+###
+
+### 3. Get all leads with search filter
+GET {{baseUrl}}?search=rahul
+Authorization: Bearer {{token}}
+
+###
+
+### 4. Get all leads with status filter
+GET {{baseUrl}}?status=New
+Authorization: Bearer {{token}}
+
+###
+
+### 5. Get lead by ID (replace {leadId} with actual ID)
+GET {{baseUrl}}/YOUR_LEAD_ID_HERE
+Authorization: Bearer {{token}}
+
+###
+
+### 6. Update lead
+PUT {{baseUrl}}/YOUR_LEAD_ID_HERE
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "status": "Contacted",
+  "notes": "Called and discussed requirements"
+}
+
+###
+
+### 7. Delete lead
+DELETE {{baseUrl}}/YOUR_LEAD_ID_HERE
+Authorization: Bearer {{token}}
+
+###
+
+### 8. Get lead statistics
+GET {{baseUrl}}/stats
+Authorization: Bearer {{token}}
+
+###
+
+### 9. Get lead statistics with date range
+GET {{baseUrl}}/stats?startDate=2024-01-01&endDate=2024-12-31
+Authorization: Bearer {{token}}
+

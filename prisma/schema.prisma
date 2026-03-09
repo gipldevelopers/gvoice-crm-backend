@@ -7,13 +7,56 @@ datasource db {
   provider = "postgresql"
 }
 
-model User {
+model Company {
   id        String   @id @default(uuid())
-  email     String   @unique
-  name      String?
-  files     File[]
+  name      String
+  address   String?
+  logo      String?
+  gstNo     String?
+  users     User[]
+  leads     Lead[]
+  customers Customer[]
+  tasks     Task[]
+  deals     Deal[]
+  projects  Project[]
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  @@map("companies")
+}
+
+model User {
+  id         String   @id @default(uuid())
+  username   String   @unique
+  fullName   String
+  email      String   @unique
+  phone      String?
+  password   String
+  department String?
+  teamName   String?
+  role       String   @default("employee")
+  reportsToId String?
+  reportsTo  User?    @relation("UserHierarchy", fields: [reportsToId], references: [id], onDelete: SetNull)
+  directReports User[] @relation("UserHierarchy")
+  token      String?
+  companyId  String
+  company    Company  @relation(fields: [companyId], references: [id])
+  files      File[]
+  leads      Lead[]   @relation("AssignedLeads")
+  leadAuditLogs LeadAuditLog[]
+  leadDocuments LeadDocument[]
+  deals      Deal[]   @relation("AssignedDeals")
+  dealDocuments DealDocument[]
+  dealApprovals DealApproval[]
+  leadApprovals LeadApproval[]
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([companyId])
+  @@index([companyId, department])
+  @@index([companyId, role])
+  @@index([reportsToId])
+  @@map("users")
 }
 
 model File {
@@ -29,4 +72,225 @@ model File {
   updatedAt    DateTime @updatedAt
 
   @@map("files")
+}
+
+model Lead {
+  id             String   @id @default(uuid())
+  name           String
+  phone          String?
+  countryCode    String?
+  email          String?
+  source         String   // Website, WhatsApp, Referral, Ads, Walk-in
+  service        String?
+  value          Float?   // Lead value in currency
+  currency       String?
+  status         String   @default("New") // New, Contacted, Qualified, Lost
+  notes          String?  @db.Text
+  salespersonId  String?
+  salesperson    User?    @relation("AssignedLeads", fields: [salespersonId], references: [id], onDelete: SetNull)
+  companyId      String
+  company        Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  customer       Customer?
+  auditLogs      LeadAuditLog[]
+  documents      LeadDocument[]
+
+  complianceStatus String @default("NA") // NA, PENDING, TL_VERIFICATION, HEAD_APPROVAL, APPROVED, REJECTED
+  approvals      LeadApproval[]
+
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@map("leads")
+}
+
+model LeadApproval {
+  id            String   @id @default(uuid())
+  leadId        String
+  lead          Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  level         String   // "TL_VERIFICATION", "HEAD_APPROVAL"
+  status        String   @default("PENDING") // PENDING, APPROVED, REJECTED
+  approverId    String?
+  approver      User?    @relation(fields: [approverId], references: [id], onDelete: SetNull)
+  comments      String?  @db.Text
+  deadline      DateTime // TAT 24 hours
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  
+  @@index([leadId, level])
+  @@map("lead_approvals")
+}
+
+model LeadAuditLog {
+  id            String   @id @default(cuid())
+  leadId         String
+  lead           Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  companyId      String
+  actorUserId    String?
+  actorUser      User?    @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+  action         String   // CREATE, UPDATE, STATUS_CHANGE, ASSIGN_CHANGE, CLAIM_REQUEST, CONVERT_TO_CUSTOMER, DELETE
+  changes        Json?
+  message        String?
+  createdAt      DateTime @default(now())
+
+  @@index([leadId, createdAt])
+  @@index([companyId, createdAt])
+  @@map("lead_audit_logs")
+}
+
+model LeadDocument {
+  id           String   @id @default(uuid())
+  leadId       String
+  lead         Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  documentType String   // "Initial SOW", "Client BOQ", "MOM Notes"
+  version      Int      // 1, 2, 3...
+  filename     String
+  originalName String
+  path         String
+  mimetype     String
+  size         Int
+  uploadedBy   String?
+  uploader     User?    @relation(fields: [uploadedBy], references: [id], onDelete: SetNull)
+  createdAt    DateTime @default(now())
+  
+  @@index([leadId, documentType])
+  @@map("lead_documents")
+}
+
+model Customer {
+  id             String   @id @default(uuid())
+  type           String   @default("Company") // Company, Individual
+  name           String
+  contactPerson  String?
+  email          String
+  phone          String
+  alternatePhone String?
+  gst            String?
+  address        String?
+  city           String?
+  state          String?
+  pincode        String?
+  notes          String?  @db.Text
+  status         String   @default("Active") // Active, Inactive
+
+  companyId      String
+  company        Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  
+  // Link to the lead this customer came from (optional)
+  leadId         String?  @unique
+  lead           Lead?    @relation(fields: [leadId], references: [id])
+
+  deals          Deal[]
+
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@map("customers")
+}
+
+model Deal {
+  id             String   @id @default(uuid())
+  title          String
+  value          Float
+  stage          String   @default("New Deal") // New Deal, Requirement Shared, Quotation Sent, Follow-up, Negotiation, Won, Lost
+  closingDate    DateTime?
+  probability    Int      @default(10)
+  notes          String?  @db.Text
+  
+  salespersonId  String?
+  salesperson    User?    @relation("AssignedDeals", fields: [salespersonId], references: [id], onDelete: SetNull)
+  
+  customerId     String?
+  customer       Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  
+  companyId      String
+  company        Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  
+  complianceStatus String @default("PENDING") // PENDING, TL_APPROVED, FINANCE_APPROVED, HEAD_APPROVED, REJECTED
+  projectGenerated Boolean @default(false)
+  
+  documents      DealDocument[]
+  approvals      DealApproval[]
+  project        Project?
+
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@map("deals")
+}
+
+model Task {
+  id          String   @id @default(cuid())
+  title       String
+  type        String   // Call, Meeting, Email, WhatsApp
+  linkedType  String   // Lead, Customer, Deal
+  linkedId    String?  // ID of the linked entity
+  linkedTo    String?  // Name of the linked entity
+  assignedTo  String
+  dueDate     DateTime
+  dueTime     String
+  status      String   @default("Pending") // Pending, Completed
+  priority    String   @default("Medium")  // High, Medium, Low
+  notes       String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  // Relations
+  companyId   String
+  company     Company  @relation(fields: [companyId], references: [id])
+  
+  @@index([companyId])
+  @@index([status])
+  @@index([priority])
+  @@index([dueDate])
+}
+
+model DealDocument {
+  id           String   @id @default(uuid())
+  dealId       String
+  deal         Deal     @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  documentType String   // "Final SOW", "Client Approved BOQ", "Advance Payment Proof", "Signed MSA", "Signed NDA"
+  filename     String
+  originalName String
+  path         String
+  mimetype     String
+  size         Int
+  uploadedBy   String?
+  uploader     User?    @relation(fields: [uploadedBy], references: [id], onDelete: SetNull)
+  createdAt    DateTime @default(now())
+  
+  @@index([dealId, documentType])
+  @@map("deal_documents")
+}
+
+model DealApproval {
+  id            String   @id @default(uuid())
+  dealId        String
+  deal          Deal     @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  level         String   // "TL_VERIFICATION", "FINANCE_CONFIRMATION", "HEAD_APPROVAL"
+  status        String   @default("PENDING") // PENDING, APPROVED, REJECTED
+  approverId    String?
+  approver      User?    @relation(fields: [approverId], references: [id], onDelete: SetNull)
+  comments      String?  @db.Text
+  deadline      DateTime // TAT 24 hours
+  escalated     Boolean  @default(false)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  
+  @@index([dealId, level])
+  @@map("deal_approvals")
+}
+
+model Project {
+  id            String   @id @default(uuid())
+  projectId     String   @unique
+  name          String
+  dealId        String   @unique
+  deal          Deal     @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  companyId     String
+  company       Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  status        String   @default("Active")
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  
+  @@map("projects")
 }
