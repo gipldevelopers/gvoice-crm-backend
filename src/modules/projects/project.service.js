@@ -31,9 +31,10 @@ class ProjectService {
         try {
             const { search, status, page = 1, limit = 10 } = filters;
 
-            const where = {
+            // 1. Fetch Existing Projects
+            const projectWhere = {
                 companyId: companyId,
-                ...(status && { status }),
+                ...(status && status !== 'Pending Activation' && { status }),
                 ...(search && {
                     OR: [
                         { name: { contains: search, mode: 'insensitive' } },
@@ -44,39 +45,177 @@ class ProjectService {
                 }),
             };
 
-            const [projects, total] = await Promise.all([
-                prisma.project.findMany({
-                    where,
-                    include: {
-                        deal: {
-                            select: {
-                                id: true,
-                                title: true,
-                                value: true,
-                                customer: {
-                                    select: {
-                                        id: true,
-                                        name: true
-                                    }
-                                },
-                                salesperson: {
-                                    select: {
-                                        id: true,
-                                        fullName: true
+            const projects = await prisma.project.findMany({
+                where: projectWhere,
+                include: {
+                    deal: {
+                        include: {
+                            customer: {
+                                include: {
+                                    lead: {
+                                        select: { currency: true }
                                     }
                                 }
+                            },
+                            salesperson: {
+                                select: {
+                                    id: true,
+                                    fullName: true
+                                }
+                            }
+                        }
+                    }
+                },
+                orderBy: { updatedAt: 'desc' },
+            });
+
+            // 2. Fetch 'Won' deals that don't have projects yet
+            let pendingDeals = [];
+            if (!status || status === 'Pending Activation' || status === 'All') {
+                const dealWhere = {
+                    companyId: companyId,
+                    stage: 'Won',
+                    projectGenerated: false,
+                    ...(search && {
+                        OR: [
+                            { title: { contains: search, mode: 'insensitive' } },
+                            { customer: { name: { contains: search, mode: 'insensitive' } } }
+                        ],
+                    }),
+                };
+
+                pendingDeals = await prisma.deal.findMany({
+                    where: dealWhere,
+                    include: {
+                        customer: {
+                            select: {
+                                id: true,
+                                name: true,
+                                lead: {
+                                    select: { currency: true }
+                                }
+                            }
+                        },
+                        salesperson: {
+                            select: {
+                                id: true,
+                                fullName: true
                             }
                         }
                     },
                     orderBy: { updatedAt: 'desc' },
-                    skip: (page - 1) * limit,
-                    take: limit,
-                }),
-                prisma.project.count({ where }),
-            ]);
+                });
+            }
+
+            // 3. Fetch 'Won' leads that don't have deals yet
+            let wonLeads = [];
+            if (!status || status === 'Pending Activation' || status === 'All') {
+                wonLeads = await prisma.lead.findMany({
+                    where: {
+                        companyId: companyId,
+                        status: 'Won',
+                        ...(search && {
+                            OR: [
+                                { name: { contains: search, mode: 'insensitive' } },
+                                { email: { contains: search, mode: 'insensitive' } }
+                            ],
+                        }),
+                        // Only get leads that don't have a deal through their customer link
+                        OR: [
+                            { customer: { is: null } },
+                            {
+                                customer: {
+                                    deals: {
+                                        none: {}
+                                    }
+                                }
+                            }
+                        ]
+                    },
+                    include: {
+                        salesperson: {
+                            select: {
+                                id: true,
+                                fullName: true
+                            }
+                        },
+                        customer: {
+                            select: {
+                                id: true,
+                                name: true
+                            }
+                        }
+                    },
+                    orderBy: { updatedAt: 'desc' },
+                });
+            }
+
+            // 4. Normalize and Combine
+            const normalizedProjects = projects.map(p => ({
+                id: p.id,
+                projectId: p.projectId,
+                name: p.name,
+                status: p.status,
+                updatedAt: p.updatedAt,
+                deal: {
+                    ...p.deal,
+                    currency: (p.deal?.customer?.lead?.currency || 'USD').toUpperCase()
+                }
+            }));
+
+            const normalizedPendingDeals = pendingDeals.map(d => ({
+                id: `deal-${d.id}`,
+                projectId: 'PENDING',
+                name: `Project: ${d.title}`,
+                status: 'Pending Activation',
+                updatedAt: d.updatedAt,
+                deal: {
+                    id: d.id,
+                    title: d.title,
+                    value: d.value,
+                    currency: (d.customer?.lead?.currency || 'USD').toUpperCase(),
+                    customer: d.customer,
+                    salesperson: d.salesperson,
+                    // Additional lead-like info if available from the deal's origin
+                    email: d.customer?.email || 'N/A',
+                    phone: d.customer?.phone || 'N/A',
+                    source: 'Operational Deal',
+                    notes: d.notes || 'No notes provided'
+                }
+            }));
+
+            const normalizedWonLeads = wonLeads.map(l => ({
+                id: `lead-${l.id}`,
+                projectId: 'PENDING',
+                name: `Project: ${l.name}`,
+                status: 'Pending Activation',
+                updatedAt: l.updatedAt,
+                deal: {
+                    id: null,
+                    title: l.name,
+                    value: l.value || 0,
+                    currency: (l.currency || 'USD').toUpperCase(),
+                    customer: l.customer || { id: null, name: l.name },
+                    salesperson: l.salesperson,
+                    email: l.email || 'N/A',
+                    phone: l.phone || 'N/A',
+                    source: l.source || 'N/A',
+                    notes: l.notes || 'No notes provided'
+                }
+            }));
+
+            let combined = [...normalizedProjects, ...normalizedPendingDeals, ...normalizedWonLeads];
+
+            // Sort by updatedAt desc
+            combined.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
+
+            // Apply manual pagination
+            const total = combined.length;
+            const startIndex = (page - 1) * limit;
+            const paginatedItems = combined.slice(startIndex, startIndex + parseInt(limit));
 
             return {
-                projects,
+                projects: paginatedItems,
                 pagination: {
                     total,
                     page: parseInt(page),
