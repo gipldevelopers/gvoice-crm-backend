@@ -1729,7 +1729,7 @@ class LeadService {
                 }
             }
 
-            const updatedLead = await prisma.lead.update({
+            let updatedLead = await prisma.lead.update({
                 where: {
                     id: leadId,
                 },
@@ -1748,6 +1748,79 @@ class LeadService {
                     },
                 },
             });
+
+            // If the status is set to Won by an Admin, automatically approve and create workspace entities
+            if (status === 'Won' && existingLead.status !== 'Won' && isCompanyAdminRole(actorRole)) {
+                updatedLead = await prisma.lead.update({
+                    where: { id: leadId },
+                    data: { complianceStatus: 'APPROVED' },
+                    include: { salesperson: { select: { id: true, fullName: true, email: true } } }
+                });
+
+                const customer = await prisma.customer.create({
+                    data: {
+                        type: "Company",
+                        name: updatedLead.name,
+                        email: updatedLead.email || 'no-email@example.com',
+                        phone: updatedLead.phone || '0000000000',
+                        contactPerson: updatedLead.name,
+                        companyId: updatedLead.companyId,
+                        leadId: updatedLead.id,
+                        status: "Active"
+                    }
+                });
+
+                const deal = await prisma.deal.create({
+                    data: {
+                        title: `Deal for ${updatedLead.name}`,
+                        value: updatedLead.value || 0,
+                        stage: 'Won',
+                        salespersonId: updatedLead.salespersonId,
+                        customerId: customer.id,
+                        companyId: updatedLead.companyId,
+                        probability: 100,
+                        projectGenerated: true,
+                        complianceStatus: 'HEAD_APPROVED'
+                    }
+                });
+
+                const tempProjectId = `PRJ-${Date.now().toString().slice(-6)}`;
+                const project = await prisma.project.create({
+                    data: {
+                        projectId: tempProjectId,
+                        name: `Project: ${updatedLead.name}`,
+                        dealId: deal.id,
+                        companyId: updatedLead.companyId,
+                        status: 'Active'
+                    }
+                });
+
+                await prisma.task.create({
+                    data: {
+                        title: `New Project Generated: ${tempProjectId}`,
+                        type: 'System',
+                        linkedType: 'Project',
+                        linkedId: project.id,
+                        linkedTo: project.name,
+                        assignedTo: 'Tech Team',
+                        dueDate: new Date(Date.now() + 24 * 60 * 60 * 1000),
+                        dueTime: "10:00",
+                        status: "Pending",
+                        priority: "High",
+                        notes: `Project ${tempProjectId} created for Won lead ${updatedLead.name}. Please provision the project workspace.`,
+                        companyId: updatedLead.companyId,
+                    }
+                });
+
+                await this.createAuditLog({
+                    leadId,
+                    companyId,
+                    actorUserId,
+                    action: 'UPDATE',
+                    message: 'Admin manually marked lead as Won. Customer, Deal and Temp Project generated automatically.',
+                    changes: { complianceStatus: { from: existingLead.complianceStatus, to: 'APPROVED' }, note }
+                });
+            }
 
             if (existingLead.status !== updatedLead.status) {
                 await this.createAuditLog({
