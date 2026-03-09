@@ -97,6 +97,8 @@ model Lead {
   complianceStatus String @default("NA") // NA, PENDING, TL_VERIFICATION, HEAD_APPROVAL, APPROVED, REJECTED
   approvals      LeadApproval[]
 
+  department     String   @default("sales") // sales, tech
+
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
@@ -181,6 +183,8 @@ model Customer {
 
   deals          Deal[]
 
+  department     String   @default("sales") // sales, tech
+
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
@@ -212,6 +216,8 @@ model Deal {
   approvals      DealApproval[]
   project        Project?
 
+  department     String   @default("sales") // sales, tech
+
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
@@ -231,6 +237,7 @@ model Task {
   status      String   @default("Pending") // Pending, Completed
   priority    String   @default("Medium")  // High, Medium, Low
   notes       String?
+  department  String   @default("sales") // sales, tech
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
   
@@ -289,6 +296,7 @@ model Project {
   companyId     String
   company       Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
   status        String   @default("Active")
+  department    String   @default("sales") // sales, tech
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
   
