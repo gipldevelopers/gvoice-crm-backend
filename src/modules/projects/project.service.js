@@ -238,7 +238,15 @@ class ProjectService {
                 include: {
                     deal: {
                         include: {
-                            customer: true,
+                            customer: {
+                                include: {
+                                    lead: {
+                                        include: {
+                                            documents: true
+                                        }
+                                    }
+                                }
+                            },
                             salesperson: true
                         }
                     }
@@ -246,6 +254,19 @@ class ProjectService {
             });
 
             if (!project) throw new Error('Project not found');
+
+            // Normalize document paths
+            if (project.deal?.customer?.lead?.documents) {
+                project.deal.customer.lead.documents = project.deal.customer.lead.documents.map(doc => {
+                    let relativePath = doc.path;
+                    const uploadsIndex = relativePath.indexOf('/uploads/');
+                    if (uploadsIndex !== -1) {
+                        relativePath = relativePath.substring(uploadsIndex);
+                    }
+                    return { ...doc, path: relativePath };
+                });
+            }
+
             return project;
         } catch (error) {
             throw new Error(`Error fetching project: ${error.message}`);
