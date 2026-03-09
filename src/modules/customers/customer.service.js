@@ -50,19 +50,27 @@ class CustomerService {
                             value: true,
                             source: true,
                         }
+                    },
+                    deals: {
+                        select: {
+                            id: true,
+                            value: true,
+                        }
                     }
                 }
             });
 
-            // Calculate derived fields if needed (frontend seems to want 'deals' count and 'totalRevenue')
-            // For now, we don't have a 'Deals' model distinct from Leads or explicit Deals. 
-            // If 'Lead' == 'Deal', then we count connected leads or we need a Deal model.
-            // Based on current schema, a Customer comes from a Lead. 
-            // The frontend shows "Deals" and "Total Revenue". 
-            // Assuming for v1 we might not have a separate Deals module yet, or we treat Won Leads as Deals.
-            // Let's just return the customer data.
+            // Calculate deals count and total revenue
+            const evaluatedCustomers = customers.map(customer => {
+                const totalRevenue = customer.deals.reduce((acc, deal) => acc + (deal.value || 0), 0);
+                return {
+                    ...customer,
+                    deals: customer.deals.length,
+                    totalRevenue: totalRevenue,
+                };
+            });
 
-            return customers;
+            return evaluatedCustomers;
         } catch (error) {
             throw new Error(`Error fetching customers: ${error.message}`);
         }

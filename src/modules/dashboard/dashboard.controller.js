@@ -3,12 +3,19 @@ const dashboardService = require('./dashboard.service');
 class DashboardController {
     async getStats(req, res) {
         try {
-            const companyId = req.user.companyId;
-            const stats = await dashboardService.getDashboardStats(companyId);
+            const isGlobalAdmin = req.user.role === 'admin' || req.user.role === 'company_admin';
+            let stats;
+
+            if (isGlobalAdmin) {
+                stats = await dashboardService.getGlobalDashboardStats();
+            } else {
+                const companyId = req.user.companyId;
+                stats = await dashboardService.getDashboardStats(companyId);
+            }
 
             return res.status(200).json({
                 success: true,
-                message: 'Dashboard stats fetched successfully',
+                message: isGlobalAdmin ? 'Global dashboard stats fetched' : 'Company dashboard stats fetched',
                 data: stats
             });
         } catch (error) {
@@ -22,12 +29,19 @@ class DashboardController {
 
     async getTrends(req, res) {
         try {
-            const companyId = req.user.companyId;
-            const trends = await dashboardService.getDashboardTrends(companyId);
+            const isGlobalAdmin = req.user.role === 'admin' || req.user.role === 'company_admin';
+            let trends;
+
+            if (isGlobalAdmin) {
+                trends = await dashboardService.getGlobalDashboardTrends();
+            } else {
+                const companyId = req.user.companyId;
+                trends = await dashboardService.getDashboardTrends(companyId);
+            }
 
             return res.status(200).json({
                 success: true,
-                message: 'Dashboard trends fetched successfully',
+                message: isGlobalAdmin ? 'Global dashboard trends fetched' : 'Company dashboard trends fetched',
                 data: trends
             });
         } catch (error) {
@@ -36,6 +50,19 @@ class DashboardController {
                 success: false,
                 message: error.message || 'Error fetching dashboard trends'
             });
+        }
+    }
+
+    async getActivities(req, res) {
+        try {
+            const { page = 1, limit = 50 } = req.query;
+            console.log('Fetching activities for page:', page, 'limit:', limit);
+            const data = await dashboardService.getGlobalActivities(page, limit);
+            console.log('Activities found:', data.activities.length);
+            return res.status(200).json({ success: true, data });
+        } catch (error) {
+            console.error('Error in getActivities controller:', error);
+            return res.status(500).json({ success: false, message: error.message });
         }
     }
 }

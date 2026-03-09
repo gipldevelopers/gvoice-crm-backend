@@ -12,6 +12,7 @@ router.get('/hierarchy', employeeController.getHierarchy);
 router.get('/managers', employeeController.getPotentialManagers);
 router.get('/:id', employeeController.getEmployee);
 router.post('/', employeeController.createEmployee);
+router.patch('/:id/status', employeeController.patchEmployeeStatus);
 router.put('/:id', employeeController.updateEmployee);
 router.delete('/:id', employeeController.deleteEmployee);
 

@@ -10,6 +10,8 @@ const customerRoutes = require('./customers/customer.routes');
 const taskRoutes = require('./tasks/task.routes');
 const dealRoutes = require('./deals/deal.routes');
 const dashboardRoutes = require('./dashboard/dashboard.routes');
+const projectRoutes = require('./projects/project.routes');
+const companyRoutes = require('./companies/company.routes');
 const googleRoutes = require('./google/google.routes');
 
 // Define routes
@@ -21,6 +23,8 @@ router.use('/customers', customerRoutes);
 router.use('/tasks', taskRoutes);
 router.use('/deals', dealRoutes);
 router.use('/dashboard', dashboardRoutes);
+router.use('/projects', projectRoutes);
+router.use('/companies', companyRoutes);
 router.use('/google', googleRoutes);
 
 module.exports = router;
