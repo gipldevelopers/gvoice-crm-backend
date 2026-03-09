@@ -10,9 +10,11 @@ datasource db {
 model Company {
   id        String   @id @default(uuid())
   name      String
+  email     String?
   address   String?
   logo      String?
   gstNo     String?
+  status    String   @default("active")
   users     User[]
   leads     Lead[]
   customers Customer[]
@@ -35,6 +37,7 @@ model User {
   department String?
   teamName   String?
   role       String   @default("employee")
+  status     String   @default("active")
   reportsToId String?
   reportsTo  User?    @relation("UserHierarchy", fields: [reportsToId], references: [id], onDelete: SetNull)
   directReports User[] @relation("UserHierarchy")
