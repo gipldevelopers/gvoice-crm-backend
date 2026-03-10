@@ -10,5 +10,9 @@ router.get('/', projectController.getAllProjects);
 router.get('/:id', projectController.getProjectById);
 router.put('/:id', projectController.updateProject);
 router.delete('/:id', projectController.deleteProject);
+router.post('/:id/acknowledge', projectController.acknowledgeProject);
+router.post('/:id/assign-pm', projectController.assignPM);
+router.post('/:id/save-plan', projectController.saveProjectPlan);
+router.post('/:id/lock-plan', projectController.lockProjectPlan);
 
 module.exports = router;

@@ -46,6 +46,9 @@ const login = async (identifier, password) => {
             email: user.email,
             fullName: user.fullName,
             username: user.username,
+            phone: user.phone,
+            department: user.department,
+            teamName: user.teamName,
             role: normalizeRole(user.role),
             company: user.company
         },
