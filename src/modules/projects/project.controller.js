@@ -112,6 +112,105 @@ class ProjectController {
             });
         }
     }
+
+    async acknowledgeProject(req, res) {
+        try {
+            const { id } = req.params;
+            const companyId = req.user.companyId;
+
+            const updatedProject = await projectService.acknowledgeProject(id, companyId);
+            return res.status(200).json({
+                success: true,
+                message: 'Project acknowledged successfully',
+                data: updatedProject,
+            });
+        } catch (error) {
+            console.error('Error in acknowledgeProject:', error);
+            return res.status(error.message === 'Project not found' ? 404 : 500).json({
+                success: false,
+                message: error.message || 'Error acknowledging project',
+            });
+        }
+    }
+
+    async assignPM(req, res) {
+        try {
+            const { id } = req.params;
+            const { pmAssignedId } = req.body;
+            const companyId = req.user.companyId;
+
+            if (!pmAssignedId) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Missing required field: pmAssignedId',
+                });
+            }
+
+            const updatedProject = await projectService.assignPM(id, pmAssignedId, companyId);
+            return res.status(200).json({
+                success: true,
+                message: 'PM assigned successfully',
+                data: updatedProject,
+            });
+        } catch (error) {
+            console.error('Error in assignPM:', error);
+            return res.status(error.message === 'Project not found' ? 404 : 500).json({
+                success: false,
+                message: error.message || 'Error assigning PM',
+            });
+        }
+    }
+
+    async saveProjectPlan(req, res) {
+        try {
+            const { id } = req.params;
+            const companyId = req.user.companyId;
+            const planData = req.body;
+
+            const updatedProject = await projectService.saveProjectPlan(id, planData, companyId);
+            return res.status(200).json({
+                success: true,
+                message: 'Project plan saved successfully',
+                data: updatedProject,
+            });
+        } catch (error) {
+            console.error('Error in saveProjectPlan:', error);
+            return res.status(error.message === 'Project not found' ? 404 : 500).json({
+                success: false,
+                message: error.message || 'Error saving project plan',
+            });
+        }
+    }
+
+    async lockProjectPlan(req, res) {
+        try {
+            const { id } = req.params;
+            const companyId = req.user.companyId;
+            const userRole = req.user.role;
+
+            // Only Tech Lead (TL), Admin, or HOD can lock/approve
+            const authorizedRoles = ['company_admin', 'head_of_department', 'team_leader'];
+            if (!authorizedRoles.includes(userRole)) {
+                return res.status(403).json({
+                    success: false,
+                    message: 'Forbidden: Tech Lead or Admin approval required to lock plan',
+                });
+            }
+
+            const updatedProject = await projectService.lockProjectPlan(id, companyId);
+            return res.status(200).json({
+                success: true,
+                message: 'Project plan locked and approved successfully',
+                data: updatedProject,
+            });
+        } catch (error) {
+            console.error('Error in lockProjectPlan:', error);
+            return res.status(error.message === 'Project not found' ? 404 : 500).json({
+                success: false,
+                message: error.message || 'Error locking project plan',
+            });
+        }
+    }
 }
 
 module.exports = new ProjectController();
