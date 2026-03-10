@@ -21,6 +21,13 @@ class ProjectService {
                     }
                 }
             });
+
+            // Update deal to mark project as generated
+            await prisma.deal.update({
+                where: { id: projectData.dealId },
+                data: { projectGenerated: true }
+            });
+
             return project;
         } catch (error) {
             throw new Error(`Error creating project: ${error.message}`);
@@ -34,7 +41,7 @@ class ProjectService {
             // 1. Fetch Existing Projects
             const projectWhere = {
                 companyId: companyId,
-                ...(status && status !== 'Pending Activation' && { status }),
+                ...(status && status !== 'Planning Phase' && { status }),
                 ...(search && {
                     OR: [
                         { name: { contains: search, mode: 'insensitive' } },
@@ -48,6 +55,9 @@ class ProjectService {
             const projects = await prisma.project.findMany({
                 where: projectWhere,
                 include: {
+                    milestones: {
+                        include: { tasks: { select: { status: true } } }
+                    },
                     deal: {
                         include: {
                             customer: {
@@ -78,7 +88,7 @@ class ProjectService {
 
             // 2. Fetch 'Won' deals that don't have projects yet
             let pendingDeals = [];
-            if (!status || status === 'Pending Activation' || status === 'All') {
+            if (!status || status === 'Planning Phase' || status === 'All') {
                 const dealWhere = {
                     companyId: companyId,
                     stage: 'Won',
@@ -112,11 +122,16 @@ class ProjectService {
                     },
                     orderBy: { updatedAt: 'desc' },
                 });
+
+                // Extra safety: Filter out any deals that already have a project in the DB
+                // but for some reason projectGenerated is still false
+                const realProjectDealIds = new Set(projects.map(p => p.dealId));
+                pendingDeals = pendingDeals.filter(d => !realProjectDealIds.has(d.id));
             }
 
             // 3. Fetch 'Won' leads that don't have deals yet
             let wonLeads = [];
-            if (!status || status === 'Pending Activation' || status === 'All') {
+            if (!status || status === 'Planning Phase' || status === 'All') {
                 wonLeads = await prisma.lead.findMany({
                     where: {
                         companyId: companyId,
@@ -157,36 +172,44 @@ class ProjectService {
                 });
             }
 
-            // 4. Normalize and Combine
-            const normalizedProjects = projects.map(p => ({
-                id: p.id,
-                projectId: p.projectId,
-                name: p.name,
-                status: p.status,
-                techLeadAcknowledge: p.techLeadAcknowledge,
-                acknowledgedAt: p.acknowledgedAt,
-                escalatedToHead: p.escalatedToHead,
-                pmAssignedId: p.pmAssignedId,
-                pm: p.pm,
-                createdAt: p.createdAt,
-                updatedAt: p.updatedAt,
-                deal: {
-                    ...p.deal,
-                    currency: (p.deal?.customer?.lead?.currency || 'USD').toUpperCase()
-                }
-            }));
+            // 4. Normalize
+            const normalizedProjects = projects.map(p => {
+                const allTasks = p.milestones?.flatMap(m => m.tasks) || [];
+                const totalTasks = allTasks.length;
+                const completedTasks = allTasks.filter(t => t.status === 'Completed').length;
+
+                return {
+                    id: p.id,
+                    projectId: p.projectId,
+                    name: p.name,
+                    status: p.status === 'Pending Activation' ? 'Planning Phase' : p.status,
+                    techLeadAcknowledge: p.techLeadAcknowledge,
+                    acknowledgedAt: p.acknowledgedAt,
+                    escalatedToHead: p.escalatedToHead,
+                    pmAssignedId: p.pmAssignedId,
+                    pm: p.pm,
+                    totalTasks,
+                    completedTasks,
+                    createdAt: p.createdAt,
+                    updatedAt: p.updatedAt,
+                    deal: {
+                        ...p.deal,
+                        currency: (p.deal?.customer?.lead?.currency || '').toUpperCase()
+                    }
+                };
+            });
 
             const normalizedPendingDeals = pendingDeals.map(d => ({
                 id: `deal-${d.id}`,
                 projectId: 'PENDING',
                 name: `Project: ${d.title}`,
-                status: 'Pending Activation',
+                status: 'Planning Phase',
                 updatedAt: d.updatedAt,
                 deal: {
                     id: d.id,
                     title: d.title,
                     value: d.value,
-                    currency: (d.customer?.lead?.currency || 'USD').toUpperCase(),
+                    currency: (d.customer?.lead?.currency || '').toUpperCase(),
                     customer: d.customer,
                     salesperson: d.salesperson,
                     // Additional lead-like info if available from the deal's origin
@@ -201,13 +224,13 @@ class ProjectService {
                 id: `lead-${l.id}`,
                 projectId: 'PENDING',
                 name: `Project: ${l.name}`,
-                status: 'Pending Activation',
+                status: 'Planning Phase',
                 updatedAt: l.updatedAt,
                 deal: {
                     id: null,
                     title: l.name,
                     value: l.value || 0,
-                    currency: (l.currency || 'USD').toUpperCase(),
+                    currency: (l.currency || '').toUpperCase(),
                     customer: l.customer || { id: null, name: l.name },
                     salesperson: l.salesperson,
                     email: l.email || 'N/A',
@@ -217,7 +240,30 @@ class ProjectService {
                 }
             }));
 
-            let combined = [...normalizedProjects, ...normalizedPendingDeals, ...normalizedWonLeads];
+            // 5. Intelligent Deduplication
+            // Filter wonLeads: exclude if we already have a Deal or Project for this lead/customer
+            const existingCustomerIds = new Set([
+                ...normalizedProjects.map(p => p.deal?.customerId).filter(Boolean),
+                ...normalizedPendingDeals.map(d => d.deal?.customer?.id).filter(Boolean)
+            ]);
+
+            const existingNames = new Set([
+                ...normalizedProjects.map(p => p.name.replace('Project: ', '').toLowerCase()),
+                ...normalizedPendingDeals.map(d => d.name.replace('Project: ', '').toLowerCase())
+            ]);
+
+            const dedupedWonLeads = normalizedWonLeads.filter(l => {
+                // Remove if customer already has a deal/project
+                if (l.deal.customer?.id && existingCustomerIds.has(l.deal.customer.id)) return false;
+
+                // Remove if the project name (usually from lead name) is already present
+                const leadName = l.name.replace('Project: ', '').toLowerCase();
+                if (existingNames.has(leadName)) return false;
+
+                return true;
+            });
+
+            let combined = [...normalizedProjects, ...normalizedPendingDeals, ...dedupedWonLeads];
 
             // Sort by updatedAt desc
             combined.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
@@ -267,12 +313,22 @@ class ProjectService {
 
                 if (!lead) throw new Error('Lead not found');
 
+                // Check if a real project already exists for this lead (via customer/deal)
+                const existingProject = await prisma.project.findFirst({
+                    where: { deal: { customer: { leadId: leadId } } },
+                    include: { deal: true }
+                });
+
+                if (existingProject) {
+                    return this.getProjectById(existingProject.id, companyId);
+                }
+
                 // Return normalized virtual project
                 return {
                     id: `lead-${lead.id}`,
                     projectId: 'PENDING',
                     name: `Project: ${lead.name}`,
-                    status: 'Pending Activation',
+                    status: 'Planning Phase',
                     updatedAt: lead.updatedAt,
                     createdAt: lead.createdAt,
                     techLeadAcknowledge: false,
@@ -280,7 +336,7 @@ class ProjectService {
                         id: null,
                         title: lead.name,
                         value: lead.value || 0,
-                        currency: (lead.currency || 'USD').toUpperCase(),
+                        currency: (lead.currency || '').toUpperCase(),
                         customer: lead.customer || { id: null, name: lead.name, lead: { documents: (lead.documents || []).map(normalizePath) } },
                         salesperson: lead.salesperson,
                         email: lead.email || 'N/A',
@@ -304,24 +360,29 @@ class ProjectService {
                             }
                         },
                         salesperson: { select: { id: true, fullName: true, email: true } },
-                        documents: true
+                        documents: true,
+                        project: { select: { id: true } }
                     }
                 });
 
                 if (!deal) throw new Error('Deal not found');
+
+                if (deal.project) {
+                    return this.getProjectById(deal.project.id, companyId);
+                }
 
                 // Return normalized virtual project
                 return {
                     id: `deal-${deal.id}`,
                     projectId: 'PENDING',
                     name: `Project: ${deal.title}`,
-                    status: 'Pending Activation',
+                    status: 'Planning Phase',
                     updatedAt: deal.updatedAt,
                     createdAt: deal.createdAt,
                     techLeadAcknowledge: false,
                     deal: {
                         ...deal,
-                        currency: (deal.customer?.lead?.currency || 'USD').toUpperCase(),
+                        currency: (deal.customer?.lead?.currency || '').toUpperCase(),
                         customer: {
                             ...deal.customer,
                             lead: {
@@ -390,7 +451,23 @@ class ProjectService {
                 project.deal.documents = project.deal.documents.map(normalizePath);
             }
 
-            return project;
+            if (project.deal?.customer?.lead) {
+                project.deal.currency = (project.deal.customer.lead.currency || '').toUpperCase();
+            }
+
+            // Calculate Planning TAT (48 Hours)
+            if (project.planningStartTime && !project.planLocked) {
+                const planningStart = new Date(project.planningStartTime);
+                const now = new Date();
+                const hoursPlanning = (now - planningStart) / (1000 * 60 * 60);
+                project.planningEscalated = hoursPlanning > 48;
+                project.planningHoursRemaining = Math.max(0, 48 - hoursPlanning);
+            }
+
+            return {
+                ...project,
+                status: project.status === 'Pending Activation' ? 'Planning Phase' : project.status
+            };
         } catch (error) {
             throw new Error(`Error fetching project: ${error.message}`);
         }
@@ -474,6 +551,11 @@ class ProjectService {
 
                 if (existingReal) {
                     realProjectId = existingReal.id;
+                    // Fix in-case flag was desynced
+                    await prisma.deal.update({
+                        where: { id: actualDealId },
+                        data: { projectGenerated: true }
+                    });
                 } else {
                     const tempId = `PRJ-${Date.now().toString().slice(-6)}`;
                     const newProj = await prisma.project.create({
@@ -486,6 +568,12 @@ class ProjectService {
                         }
                     });
                     realProjectId = newProj.id;
+
+                    // Mark deal as project generated
+                    await prisma.deal.update({
+                        where: { id: actualDealId },
+                        data: { projectGenerated: true }
+                    });
                 }
             }
 
@@ -540,7 +628,7 @@ class ProjectService {
                 realProjectId = acknowledged.id;
             }
 
-            const existingProject = await prisma.project.findUnique({
+            const existingProject = await prisma.project.findFirst({
                 where: {
                     id: realProjectId,
                     companyId: companyId,
@@ -581,40 +669,59 @@ class ProjectService {
 
     async saveProjectPlan(projectId, planData, companyId) {
         try {
+            let realProjectId = projectId;
+
+            // Handle Virtual IDs
+            if (projectId.startsWith('lead-') || projectId.startsWith('deal-')) {
+                const acknowledged = await this.acknowledgeProject(projectId, companyId);
+                realProjectId = acknowledged.id;
+            }
+
             const { milestones } = planData;
 
             // Use a transaction to update milestones and tasks
             await prisma.$transaction(async (tx) => {
                 // 1. Delete existing milestones and tasks for this project (re-sync approach)
                 await tx.projectMilestone.deleteMany({
-                    where: { projectId: projectId }
+                    where: { projectId: realProjectId }
                 });
 
                 // 2. Create new milestones and tasks
                 for (const m of milestones) {
                     await tx.projectMilestone.create({
                         data: {
-                            projectId: projectId,
+                            projectId: realProjectId,
                             title: m.title,
                             description: m.description,
-                            deadline: new Date(m.deadline),
+                            deadline: m.deadline ? new Date(m.deadline) : null,
                             status: m.status || 'Pending',
                             tasks: {
-                                create: (m.tasks || []).map(t => ({
-                                    title: t.title,
-                                    description: t.description,
-                                    deadline: new Date(t.deadline),
-                                    status: t.status || 'Pending',
-                                    priority: t.priority || 'Medium',
-                                    assignedToId: t.assignedToId
-                                }))
+                                create: (m.tasks || []).map(t => {
+                                    const hasAssignee = !!t.assignedToId;
+                                    const assignedAt = hasAssignee ? new Date() : null;
+                                    const acceptanceDueAt = hasAssignee
+                                        ? new Date(assignedAt.getTime() + 8 * 60 * 60 * 1000) // +8 hours
+                                        : null;
+                                    return {
+                                        title: t.title,
+                                        description: t.description,
+                                        deliverable: t.deliverable || null,
+                                        estimatedHours: t.estimatedHours ? parseFloat(t.estimatedHours) : null,
+                                        deadline: t.deadline ? new Date(t.deadline) : null,
+                                        status: t.status || 'Pending',
+                                        priority: t.priority || 'Medium',
+                                        assignedToId: t.assignedToId || null,
+                                        assignedAt,
+                                        acceptanceDueAt
+                                    };
+                                })
                             }
                         }
                     });
                 }
             });
 
-            return this.getProjectById(projectId, companyId);
+            return this.getProjectById(realProjectId, companyId);
         } catch (error) {
             throw new Error(`Error saving project plan: ${error.message}`);
         }
@@ -622,11 +729,19 @@ class ProjectService {
 
     async lockProjectPlan(projectId, companyId) {
         try {
+            let realProjectId = projectId;
+
+            // Handle Virtual IDs
+            if (projectId.startsWith('lead-') || projectId.startsWith('deal-')) {
+                const acknowledged = await this.acknowledgeProject(projectId, companyId);
+                realProjectId = acknowledged.id;
+            }
+
             const updatedProject = await prisma.project.update({
-                where: { id: projectId },
+                where: { id: realProjectId },
                 data: {
                     planLocked: true,
-                    status: 'Active' // Transition to Active phase once plan is locked
+                    status: 'In Progress' // Plan locked → team actively executing
                 },
                 include: {
                     milestones: {
@@ -659,6 +774,190 @@ class ProjectService {
             return { message: 'Project deleted successfully' };
         } catch (error) {
             throw new Error(`Error deleting project: ${error.message}`);
+        }
+    }
+
+    // ─── STAGE 8: TASK EXECUTION ENGINE ─────────────────────────────────────────
+
+    /**
+     * Get all tasks assigned to a specific user across all projects
+     */
+    async getMyTasks(userId, companyId) {
+        try {
+            const tasks = await prisma.projectTask.findMany({
+                where: {
+                    assignedToId: userId,
+                    milestone: {
+                        project: { companyId }
+                    }
+                },
+                include: {
+                    milestone: {
+                        include: {
+                            project: {
+                                select: { id: true, name: true, projectId: true, status: true }
+                            }
+                        }
+                    },
+                    assignedTo: { select: { id: true, fullName: true, email: true } }
+                },
+                orderBy: [
+                    { priority: 'asc' },
+                    { deadline: 'asc' }
+                ]
+            });
+
+            // Auto-escalate overdue acceptances
+            const now = new Date();
+            const tasksWithStatus = tasks.map(task => {
+                const isAcceptanceOverdue = task.acceptanceDueAt && !task.acceptedAt && now > new Date(task.acceptanceDueAt);
+                return {
+                    ...task,
+                    isAcceptanceOverdue,
+                    hoursUntilAcceptanceDue: task.acceptanceDueAt
+                        ? Math.max(0, (new Date(task.acceptanceDueAt) - now) / (1000 * 60 * 60))
+                        : null
+                };
+            });
+
+            return tasksWithStatus;
+        } catch (error) {
+            throw new Error(`Error fetching tasks: ${error.message}`);
+        }
+    }
+
+    /**
+     * Get all tasks for a project (for PM/TL view)
+     */
+    async getProjectTasks(projectId, companyId) {
+        try {
+            const project = await prisma.project.findFirst({
+                where: { id: projectId, companyId },
+                include: {
+                    milestones: {
+                        include: {
+                            tasks: {
+                                include: {
+                                    assignedTo: { select: { id: true, fullName: true, email: true } }
+                                },
+                                orderBy: { createdAt: 'asc' }
+                            }
+                        },
+                        orderBy: { createdAt: 'asc' }
+                    }
+                }
+            });
+
+            if (!project) throw new Error('Project not found');
+
+            const now = new Date();
+            // Flatten tasks and enrich with TAT info
+            const allTasks = project.milestones.flatMap(m =>
+                m.tasks.map(t => ({
+                    ...t,
+                    milestoneName: m.title,
+                    isAcceptanceOverdue: t.acceptanceDueAt && !t.acceptedAt && now > new Date(t.acceptanceDueAt),
+                    hoursUntilAcceptanceDue: t.acceptanceDueAt
+                        ? Math.max(0, (new Date(t.acceptanceDueAt) - now) / (1000 * 60 * 60))
+                        : null
+                }))
+            );
+
+            return { project, tasks: allTasks };
+        } catch (error) {
+            throw new Error(`Error fetching project tasks: ${error.message}`);
+        }
+    }
+
+    /**
+     * Accept a task assignment (resets TAT clock)
+     */
+    async acceptTask(taskId, userId, companyId) {
+        try {
+            const task = await prisma.projectTask.findFirst({
+                where: {
+                    id: taskId,
+                    assignedToId: userId,
+                    milestone: { project: { companyId } }
+                }
+            });
+
+            if (!task) throw new Error('Task not found or not assigned to you');
+            if (task.acceptanceStatus === 'Accepted') throw new Error('Task already accepted');
+
+            const now = new Date();
+            return await prisma.projectTask.update({
+                where: { id: taskId },
+                data: {
+                    acceptanceStatus: 'Accepted',
+                    acceptedAt: now,
+                    status: 'In Progress'
+                },
+                include: {
+                    assignedTo: { select: { id: true, fullName: true } },
+                    milestone: { include: { project: { select: { id: true, name: true } } } }
+                }
+            });
+        } catch (error) {
+            throw new Error(`Error accepting task: ${error.message}`);
+        }
+    }
+
+    /**
+     * Update task status (In Progress → Completed etc.)
+     */
+    async updateTaskStatus(taskId, userId, status, companyId) {
+        try {
+            const validStatuses = ['In Progress', 'Completed', 'On Hold'];
+            if (!validStatuses.includes(status)) throw new Error(`Invalid status. Must be one of: ${validStatuses.join(', ')}`);
+
+            const task = await prisma.projectTask.findFirst({
+                where: {
+                    id: taskId,
+                    assignedToId: userId,
+                    milestone: { project: { companyId } }
+                }
+            });
+
+            if (!task) throw new Error('Task not found or not assigned to you');
+            if (!task.acceptedAt) throw new Error('You must accept the task before updating its status');
+
+            return await prisma.projectTask.update({
+                where: { id: taskId },
+                data: { status },
+                include: {
+                    assignedTo: { select: { id: true, fullName: true } },
+                    milestone: { include: { project: { select: { id: true, name: true } } } }
+                }
+            });
+        } catch (error) {
+            throw new Error(`Error updating task status: ${error.message}`);
+        }
+    }
+
+    /**
+     * Check and escalate overdue task acceptances (called periodically or on-demand)
+     */
+    async checkAndEscalateTasks(companyId) {
+        try {
+            const now = new Date();
+            const overdueResult = await prisma.projectTask.updateMany({
+                where: {
+                    acceptanceDueAt: { lt: now },
+                    acceptedAt: null,
+                    acceptanceStatus: { not: 'Escalated' },
+                    milestone: { project: { companyId } }
+                },
+                data: {
+                    acceptanceStatus: 'Escalated',
+                    escalatedAt: now,
+                    status: 'Escalated'
+                }
+            });
+
+            return { escalated: overdueResult.count };
+        } catch (error) {
+            throw new Error(`Error checking escalations: ${error.message}`);
         }
     }
 }

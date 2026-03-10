@@ -134,10 +134,9 @@ class DealService {
                         },
                     },
                     customer: {
-                        select: {
-                            id: true,
-                            name: true,
-                        },
+                        include: {
+                            lead: true
+                        }
                     },
                 },
             });
@@ -202,10 +201,9 @@ class DealService {
                         },
                     },
                     customer: {
-                        select: {
-                            id: true,
-                            name: true,
-                        },
+                        include: {
+                            lead: true
+                        }
                     },
                 },
             });

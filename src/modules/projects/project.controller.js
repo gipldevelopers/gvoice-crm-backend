@@ -211,6 +211,72 @@ class ProjectController {
             });
         }
     }
+
+    // ─── STAGE 8: TASK EXECUTION ENGINE ─────────────────────────────────────────
+
+    async getMyTasks(req, res) {
+        try {
+            const userId = req.user.id;
+            const companyId = req.user.companyId;
+            const tasks = await projectService.getMyTasks(userId, companyId);
+            return res.status(200).json({ success: true, data: tasks });
+        } catch (error) {
+            console.error('Error in getMyTasks:', error);
+            return res.status(500).json({ success: false, message: error.message });
+        }
+    }
+
+    async getProjectTasks(req, res) {
+        try {
+            const { id } = req.params;
+            const companyId = req.user.companyId;
+            // Auto-check escalations on each fetch
+            await projectService.checkAndEscalateTasks(companyId);
+            const result = await projectService.getProjectTasks(id, companyId);
+            return res.status(200).json({ success: true, ...result });
+        } catch (error) {
+            console.error('Error in getProjectTasks:', error);
+            return res.status(500).json({ success: false, message: error.message });
+        }
+    }
+
+    async acceptTask(req, res) {
+        try {
+            const { taskId } = req.params;
+            const userId = req.user.id;
+            const companyId = req.user.companyId;
+            const task = await projectService.acceptTask(taskId, userId, companyId);
+            return res.status(200).json({ success: true, message: 'Task accepted successfully', data: task });
+        } catch (error) {
+            console.error('Error in acceptTask:', error);
+            return res.status(400).json({ success: false, message: error.message });
+        }
+    }
+
+    async updateTaskStatus(req, res) {
+        try {
+            const { taskId } = req.params;
+            const { status } = req.body;
+            const userId = req.user.id;
+            const companyId = req.user.companyId;
+            const task = await projectService.updateTaskStatus(taskId, userId, status, companyId);
+            return res.status(200).json({ success: true, message: 'Task status updated', data: task });
+        } catch (error) {
+            console.error('Error in updateTaskStatus:', error);
+            return res.status(400).json({ success: false, message: error.message });
+        }
+    }
+
+    async checkEscalations(req, res) {
+        try {
+            const companyId = req.user.companyId;
+            const result = await projectService.checkAndEscalateTasks(companyId);
+            return res.status(200).json({ success: true, ...result });
+        } catch (error) {
+            console.error('Error in checkEscalations:', error);
+            return res.status(500).json({ success: false, message: error.message });
+        }
+    }
 }
 
 module.exports = new ProjectController();

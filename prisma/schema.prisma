@@ -325,7 +325,7 @@ model ProjectMilestone {
   id          String   @id @default(uuid())
   title       String
   description String?  @db.Text
-  deadline    DateTime
+  deadline    DateTime?
   status      String   @default("Pending") // Pending, Completed
   projectId   String
   project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
@@ -342,11 +342,21 @@ model ProjectTask {
   id          String   @id @default(uuid())
   title       String
   description String?  @db.Text
-  deadline    DateTime
-  status      String   @default("Pending") // Pending, Completed
+  deliverable String?  @db.Text          // What the owner must deliver
+  deadline    DateTime?
+  estimatedHours Float?                  // Estimated effort in hours
+  status      String   @default("Pending") // Pending, Accepted, In Progress, Completed, Escalated
   priority    String   @default("Medium")  // High, Medium, Low
-  assignedToId String?
-  assignedTo   User?    @relation("ProjectTaskAssignedTo", fields: [assignedToId], references: [id])
+  
+  // Assignment & Acceptance TAT fields
+  assignedToId       String?
+  assignedTo         User?    @relation("ProjectTaskAssignedTo", fields: [assignedToId], references: [id])
+  assignedAt         DateTime?            // When task was assigned
+  acceptanceStatus   String?              // null, Accepted, Rejected, Escalated
+  acceptedAt         DateTime?            // When task was accepted
+  acceptanceDueAt    DateTime?            // assignedAt + 8 hours
+  escalatedAt        DateTime?            // When escalation was triggered
+  
   milestoneId  String
   milestone    ProjectMilestone @relation(fields: [milestoneId], references: [id], onDelete: Cascade)
 
