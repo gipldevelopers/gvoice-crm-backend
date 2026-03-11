@@ -15,12 +15,14 @@ const EMPLOYEE_SELECT = {
     department: true,
     teamName: true,
     role: true,
+    status: true,
     reportsToId: true,
     reportsTo: {
         select: {
             id: true,
             fullName: true,
-            role: true
+            role: true,
+            status: true
         }
     },
     _count: {
@@ -28,7 +30,13 @@ const EMPLOYEE_SELECT = {
             directReports: true
         }
     },
-    createdAt: true
+    createdAt: true,
+    company: {
+        select: {
+            id: true,
+            name: true
+        }
+    }
 };
 
 const ROLE_FILTER_ALIASES = {
@@ -164,23 +172,34 @@ const validateReportingStructure = async ({
     return manager;
 };
 
-const getAllEmployees = async (companyId, filters = {}) => {
-    const { department, role, search, managerId } = filters;
+const getAllEmployees = async (filters = {}) => {
+    const { companyId, department, role, status, search, managerId, page = 1, limit = 10 } = filters;
+    const skip = (page - 1) * limit;
 
-    const where = { companyId };
+    const where = {};
+    if (companyId && companyId !== 'all') {
+        where.companyId = companyId;
+    }
+
     const andConditions = [];
 
     if (department && department !== 'All') {
         where.department = { equals: department, mode: 'insensitive' };
     }
 
-    if (role && role !== 'All') {
+    if (role && role !== 'all' && role !== 'All') {
         const roleValues = getRoleFilterValues(role);
         andConditions.push({
             OR: roleValues.map((value) => ({
                 role: { equals: value, mode: 'insensitive' }
             }))
         });
+    }
+
+    if (status && status !== 'all') {
+        // Assuming status is a field in User model (based on frontend)
+        // If it's not in schema, I might need to add it.
+        where.status = status;
     }
 
     if (managerId) {
@@ -193,9 +212,10 @@ const getAllEmployees = async (companyId, filters = {}) => {
                 { fullName: { contains: search, mode: 'insensitive' } },
                 { email: { contains: search, mode: 'insensitive' } },
                 { phone: { contains: search, mode: 'insensitive' } },
+                { username: { contains: search, mode: 'insensitive' } },
                 { department: { contains: search, mode: 'insensitive' } },
                 { teamName: { contains: search, mode: 'insensitive' } },
-                { reportsTo: { is: { fullName: { contains: search, mode: 'insensitive' } } } }
+                { company: { name: { contains: search, mode: 'insensitive' } } }
             ]
         });
     }
@@ -204,18 +224,35 @@ const getAllEmployees = async (companyId, filters = {}) => {
         where.AND = andConditions;
     }
 
-    const employees = await prisma.user.findMany({
-        where,
-        select: EMPLOYEE_SELECT,
-        orderBy: { fullName: 'asc' }
-    });
+    const [employees, total] = await Promise.all([
+        prisma.user.findMany({
+            where,
+            select: EMPLOYEE_SELECT,
+            skip,
+            take: Number(limit),
+            orderBy: { fullName: 'asc' }
+        }),
+        prisma.user.count({ where })
+    ]);
 
-    return employees.map(mapEmployee);
+    return {
+        users: employees.map(mapEmployee),
+        pagination: {
+            total,
+            page: Number(page),
+            limit: Number(limit),
+            totalPages: Math.ceil(total / limit)
+        }
+    };
 };
 
 const getEmployeeById = async (id, companyId) => {
+    const where = { id };
+    if (companyId) {
+        where.companyId = companyId;
+    }
     const employee = await prisma.user.findFirst({
-        where: { id, companyId },
+        where,
         select: EMPLOYEE_SELECT
     });
 
@@ -233,7 +270,8 @@ const createEmployee = async (data) => {
         teamName,
         role,
         reportsToId,
-        companyId
+        companyId,
+        status
     } = data;
 
     const normalizedRole = normalizeRole(role);
@@ -283,7 +321,8 @@ const createEmployee = async (data) => {
             }),
             role: normalizedRole,
             reportsToId: reportsToId || null,
-            companyId
+            companyId,
+            status: status || 'active'
         },
         select: EMPLOYEE_SELECT
     });
@@ -301,32 +340,39 @@ const updateEmployee = async (id, data, companyId) => {
         department,
         teamName,
         role,
-        reportsToId
+        reportsToId,
+        status
     } = data;
 
+    const queryWhere = { id };
+    if (companyId) {
+        queryWhere.companyId = companyId;
+    }
+
     const existing = await prisma.user.findFirst({
-        where: { id, companyId },
-        select: { id: true, role: true, email: true, username: true }
+        where: queryWhere,
+        select: { id: true, role: true, email: true, username: true, companyId: true }
     });
 
     if (!existing) {
         return { count: 0 };
     }
 
+    const targetCompanyId = existing.companyId;
     const normalizedRole = normalizeRole(role || existing.role);
     const normalizedDepartment = normalizedRole === EMPLOYEE_ROLES.COMPANY_ADMIN ? null : (department || null);
     const normalizedManagerId = reportsToId === '' ? null : reportsToId;
 
     if (normalizedRole === EMPLOYEE_ROLES.HEAD_OF_DEPARTMENT) {
         await ensureSingleDepartmentHead({
-            companyId,
+            companyId: targetCompanyId,
             department: normalizedDepartment,
             excludeUserId: id,
         });
     }
 
     const reportingManager = await validateReportingStructure({
-        companyId,
+        companyId: targetCompanyId,
         role: normalizedRole,
         department: normalizedDepartment,
         reportsToId: normalizedManagerId,
@@ -371,7 +417,8 @@ const updateEmployee = async (id, data, companyId) => {
         department: normalizedDepartment,
         teamName: resolvedTeamName,
         role: normalizedRole,
-        reportsToId: normalizedManagerId || null
+        reportsToId: normalizedManagerId || null,
+        status: status || undefined
     };
 
     if (password) {
@@ -390,7 +437,7 @@ const updateEmployee = async (id, data, companyId) => {
     ) {
         await prisma.user.updateMany({
             where: {
-                companyId,
+                companyId: targetCompanyId,
                 reportsToId: id,
                 OR: [
                     { role: { equals: EMPLOYEE_ROLES.EMPLOYEE, mode: 'insensitive' } },
@@ -408,14 +455,24 @@ const updateEmployee = async (id, data, companyId) => {
 };
 
 const deleteEmployee = async (id, companyId) => {
+    // Check existence
+    const queryWhere = { id };
+    if (companyId) {
+        queryWhere.companyId = companyId;
+    }
+    const existing = await prisma.user.findFirst({ where: queryWhere });
+    if (!existing) return { count: 0 };
+
     await prisma.user.updateMany({
-        where: { companyId, reportsToId: id },
+        where: { reportsToId: id },
         data: { reportsToId: null }
     });
 
-    return prisma.user.deleteMany({
-        where: { id, companyId }
+    const result = await prisma.user.delete({
+        where: { id }
     });
+
+    return { count: 1 };
 };
 
 const getDepartments = async (companyId) => {
