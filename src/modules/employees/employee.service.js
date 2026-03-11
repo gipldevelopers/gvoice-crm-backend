@@ -184,7 +184,7 @@ const getAllEmployees = async (filters = {}) => {
     const andConditions = [];
 
     if (department && department !== 'All') {
-        where.department = department;
+        where.department = { equals: department, mode: 'insensitive' };
     }
 
     if (role && role !== 'all' && role !== 'All') {

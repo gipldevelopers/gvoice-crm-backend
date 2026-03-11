@@ -52,6 +52,8 @@ model User {
   dealDocuments DealDocument[]
   dealApprovals DealApproval[]
   leadApprovals LeadApproval[]
+  assignedProjects Project[] @relation("AssignedPM")
+  projectTasks     ProjectTask[] @relation("ProjectTaskAssignedTo")
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
@@ -300,8 +302,56 @@ model Project {
   company       Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
   status        String   @default("Active")
   department    String   @default("sales") // sales, tech
+  
+  techLeadAcknowledge Boolean  @default(false)
+  acknowledgedAt      DateTime?
+  escalatedToHead     Boolean  @default(false)
+  pmAssignedId        String?
+  pm                  User?    @relation("AssignedPM", fields: [pmAssignedId], references: [id], onDelete: SetNull)
+  
+  // Planning Phase Fields
+  planningStartTime DateTime?
+  planLocked        Boolean  @default(false)
+  planApproved      Boolean  @default(false)
+  milestones        ProjectMilestone[]
+  
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
   
   @@map("projects")
+}
+
+model ProjectMilestone {
+  id          String   @id @default(uuid())
+  title       String
+  description String?  @db.Text
+  deadline    DateTime
+  status      String   @default("Pending") // Pending, Completed
+  projectId   String
+  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  
+  tasks       ProjectTask[]
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("project_milestones")
+}
+
+model ProjectTask {
+  id          String   @id @default(uuid())
+  title       String
+  description String?  @db.Text
+  deadline    DateTime
+  status      String   @default("Pending") // Pending, Completed
+  priority    String   @default("Medium")  // High, Medium, Low
+  assignedToId String?
+  assignedTo   User?    @relation("ProjectTaskAssignedTo", fields: [assignedToId], references: [id])
+  milestoneId  String
+  milestone    ProjectMilestone @relation(fields: [milestoneId], references: [id], onDelete: Cascade)
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("project_tasks")
 }
