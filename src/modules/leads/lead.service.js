@@ -827,6 +827,57 @@ class LeadService {
         return null;
     }
 
+    async resolveHierarchyApproverForUser({ companyId, requesterId }) {
+        const requester = await prisma.user.findFirst({
+            where: { id: requesterId, companyId },
+            select: { id: true, fullName: true, email: true, role: true, reportsToId: true, department: true }
+        });
+
+        if (!requester) return null;
+        const role = normalizeRole(requester.role);
+
+        if (role === EMPLOYEE_ROLES.EMPLOYEE) {
+            if (requester.reportsToId) {
+                const manager = await prisma.user.findFirst({
+                    where: { id: requester.reportsToId, companyId },
+                    select: { id: true, fullName: true, email: true }
+                });
+                if (manager) return manager;
+            }
+            if (requester.department) {
+                const manager = await prisma.user.findFirst({
+                    where: { companyId, department: requester.department, role: { in: [EMPLOYEE_ROLES.TEAM_LEADER, 'manager'] } },
+                    select: { id: true, fullName: true, email: true }
+                });
+                if (manager) return manager;
+            }
+            return await prisma.user.findFirst({
+                where: { companyId, role: { in: [EMPLOYEE_ROLES.TEAM_LEADER, 'manager'] } },
+                select: { id: true, fullName: true, email: true }
+            }) || await this.resolveDepartmentHeadApproverForUser({ companyId, requesterId });
+        }
+
+        if (role === EMPLOYEE_ROLES.TEAM_LEADER) {
+            return await this.resolveDepartmentHeadApproverForUser({ companyId, requesterId });
+        }
+
+        if (role === EMPLOYEE_ROLES.HEAD_OF_DEPARTMENT) {
+            if (requester.reportsToId) {
+                const admin = await prisma.user.findFirst({
+                    where: { id: requester.reportsToId, companyId, role: { in: [EMPLOYEE_ROLES.COMPANY_ADMIN, 'admin'] } },
+                    select: { id: true, fullName: true, email: true }
+                });
+                if (admin) return admin;
+            }
+            return await prisma.user.findFirst({
+                where: { companyId, role: { in: [EMPLOYEE_ROLES.COMPANY_ADMIN, 'admin'] } },
+                select: { id: true, fullName: true, email: true }
+            });
+        }
+
+        return null;
+    }
+
     async resolveDepartmentHeadApproverForUser({ companyId, requesterId }) {
         const requester = await prisma.user.findFirst({
             where: { id: requesterId, companyId },
@@ -1211,6 +1262,15 @@ class LeadService {
                             name: true,
                         },
                     },
+                    customer: {
+                        include: {
+                            deals: {
+                                include: {
+                                    project: true
+                                }
+                            }
+                        }
+                    },
                     auditLogs: {
                         include: {
                             actorUser: {
@@ -1581,25 +1641,18 @@ class LeadService {
                 throw new Error('Only the user who created/owns the lead can change the lead status');
             }
 
-            // Handle Qualified status approval for employees
-            if (status === 'Qualified' && normalizeRole(actorRole) === EMPLOYEE_ROLES.EMPLOYEE) {
-                const requester = await prisma.user.findFirst({
-                    where: { id: actorUserId, companyId },
-                    select: { id: true, fullName: true, email: true, reportsToId: true }
-                });
+            // Handle Qualified status approval for roles requiring approval
+            if (status === 'Qualified' && !isCompanyAdminRole(actorRole)) {
+                const manager = await this.resolveHierarchyApproverForUser({ companyId, requesterId: actorUserId });
 
-                if (!requester?.reportsToId) {
+                if (!manager) {
                     throw new Error('No manager found to approve your status change request');
                 }
 
-                const manager = await prisma.user.findFirst({
-                    where: { id: requester.reportsToId, companyId },
+                const requester = await prisma.user.findFirst({
+                    where: { id: actorUserId, companyId },
                     select: { id: true, fullName: true, email: true }
                 });
-
-                if (!manager) {
-                    throw new Error('Manager not found');
-                }
 
                 const approvalDeadline = new Date(Date.now() + (CLAIM_APPROVAL_WINDOW_HOURS * 60 * 60 * 1000));
                 const dueTime = `${String(approvalDeadline.getHours()).padStart(2, '0')}:${String(approvalDeadline.getMinutes()).padStart(2, '0')}`;
@@ -1676,7 +1729,7 @@ class LeadService {
                 }
             }
 
-            const updatedLead = await prisma.lead.update({
+            let updatedLead = await prisma.lead.update({
                 where: {
                     id: leadId,
                 },
@@ -1695,6 +1748,79 @@ class LeadService {
                     },
                 },
             });
+
+            // If the status is set to Won by an Admin, automatically approve and create workspace entities
+            if (status === 'Won' && existingLead.status !== 'Won' && isCompanyAdminRole(actorRole)) {
+                updatedLead = await prisma.lead.update({
+                    where: { id: leadId },
+                    data: { complianceStatus: 'APPROVED' },
+                    include: { salesperson: { select: { id: true, fullName: true, email: true } } }
+                });
+
+                const customer = await prisma.customer.create({
+                    data: {
+                        type: "Company",
+                        name: updatedLead.name,
+                        email: updatedLead.email || 'no-email@example.com',
+                        phone: updatedLead.phone || '0000000000',
+                        contactPerson: updatedLead.name,
+                        companyId: updatedLead.companyId,
+                        leadId: updatedLead.id,
+                        status: "Active"
+                    }
+                });
+
+                const deal = await prisma.deal.create({
+                    data: {
+                        title: `Deal for ${updatedLead.name}`,
+                        value: updatedLead.value || 0,
+                        stage: 'Won',
+                        salespersonId: updatedLead.salespersonId,
+                        customerId: customer.id,
+                        companyId: updatedLead.companyId,
+                        probability: 100,
+                        projectGenerated: true,
+                        complianceStatus: 'HEAD_APPROVED'
+                    }
+                });
+
+                const tempProjectId = `PRJ-${Date.now().toString().slice(-6)}`;
+                const project = await prisma.project.create({
+                    data: {
+                        projectId: tempProjectId,
+                        name: `Project: ${updatedLead.name}`,
+                        dealId: deal.id,
+                        companyId: updatedLead.companyId,
+                        status: 'Active'
+                    }
+                });
+
+                await prisma.task.create({
+                    data: {
+                        title: `New Project Generated: ${tempProjectId}`,
+                        type: 'System',
+                        linkedType: 'Project',
+                        linkedId: project.id,
+                        linkedTo: project.name,
+                        assignedTo: 'Tech Team',
+                        dueDate: new Date(Date.now() + 24 * 60 * 60 * 1000),
+                        dueTime: "10:00",
+                        status: "Pending",
+                        priority: "High",
+                        notes: `Project ${tempProjectId} created for Won lead ${updatedLead.name}. Please provision the project workspace.`,
+                        companyId: updatedLead.companyId,
+                    }
+                });
+
+                await this.createAuditLog({
+                    leadId,
+                    companyId,
+                    actorUserId,
+                    action: 'UPDATE',
+                    message: 'Admin manually marked lead as Won. Customer, Deal and Temp Project generated automatically.',
+                    changes: { complianceStatus: { from: existingLead.complianceStatus, to: 'APPROVED' }, note }
+                });
+            }
 
             if (existingLead.status !== updatedLead.status) {
                 await this.createAuditLog({
@@ -2818,12 +2944,25 @@ class LeadService {
             params.documentType = documentType;
         }
 
-        return prisma.leadDocument.findMany({
+        const documents = await prisma.leadDocument.findMany({
             where: params,
             include: {
                 uploader: { select: { id: true, fullName: true, email: true } },
             },
             orderBy: [{ documentType: 'asc' }, { version: 'desc' }],
+        });
+
+        // Strip OS absolute paths before returning to front-end
+        return documents.map(doc => {
+            let relativePath = doc.path;
+            const uploadsIndex = relativePath.indexOf('/uploads/');
+            if (uploadsIndex !== -1) {
+                relativePath = relativePath.substring(uploadsIndex);
+            }
+            return {
+                ...doc,
+                path: relativePath
+            };
         });
     }
 
@@ -2928,18 +3067,35 @@ class LeadService {
             throw new Error(`Compliance flow is already in progress or completed (${lead.complianceStatus}).`);
         }
 
+        const requester = await prisma.user.findFirst({
+            where: { id: userId, companyId },
+            select: { role: true }
+        });
+        const role = normalizeRole(requester?.role);
+
+        let initialLevel = 'TL_VERIFICATION';
+        let initialStatus = 'TL_VERIFICATION';
+
+        if (role === EMPLOYEE_ROLES.TEAM_LEADER) {
+            initialLevel = 'HEAD_APPROVAL';
+            initialStatus = 'HEAD_APPROVAL';
+        } else if (role === EMPLOYEE_ROLES.HEAD_OF_DEPARTMENT || role === EMPLOYEE_ROLES.COMPANY_ADMIN) {
+            initialLevel = 'ADMIN_APPROVAL';
+            initialStatus = 'ADMIN_APPROVAL';
+        }
+
         const deadline = new Date(Date.now() + 24 * 60 * 60 * 1000);
         await prisma.leadApproval.create({
             data: {
                 leadId,
-                level: 'TL_VERIFICATION',
+                level: initialLevel,
                 deadline
             }
         });
 
         await prisma.lead.update({
             where: { id: leadId },
-            data: { complianceStatus: 'TL_VERIFICATION' }
+            data: { complianceStatus: initialStatus }
         });
 
         await this.createAuditLog({
@@ -2947,11 +3103,11 @@ class LeadService {
             companyId,
             actorUserId: userId,
             action: 'UPDATE',
-            message: 'Lead compliance submitted for TL Verification',
-            changes: { complianceStatus: { from: lead.complianceStatus, to: 'TL_VERIFICATION' } }
+            message: `Lead compliance submitted for ${initialLevel}`,
+            changes: { complianceStatus: { from: lead.complianceStatus, to: initialStatus } }
         });
 
-        return { message: 'Compliance flow submitted to TL Verification' };
+        return { message: `Compliance flow submitted to ${initialLevel}` };
     }
 
     async approveLeadCompliance({ leadId, companyId, userId, level, action, comments }) {
@@ -3004,6 +3160,9 @@ class LeadService {
         if (level === 'TL_VERIFICATION') {
             nextLevel = 'HEAD_APPROVAL';
             nextComplianceStatus = 'HEAD_APPROVAL';
+        } else if (level === 'HEAD_APPROVAL') {
+            nextLevel = 'ADMIN_APPROVAL';
+            nextComplianceStatus = 'ADMIN_APPROVAL';
         }
 
         if (nextLevel) {
@@ -3037,6 +3196,66 @@ class LeadService {
             where: { id: leadId },
             data: {
                 complianceStatus: 'APPROVED',
+                status: 'Won' // As per flow logic
+            }
+        });
+
+        // Generate customer
+        const customer = await prisma.customer.create({
+            data: {
+                type: "Company",
+                name: updatedLead.name,
+                email: updatedLead.email || 'no-email@example.com',
+                phone: updatedLead.phone || '0000000000',
+                contactPerson: updatedLead.name,
+                companyId: updatedLead.companyId,
+                leadId: updatedLead.id,
+                status: "Active"
+            }
+        });
+
+        // Create deal
+        const deal = await prisma.deal.create({
+            data: {
+                title: `Deal for ${updatedLead.name}`,
+                value: updatedLead.value || 0,
+                stage: 'Won',
+                salespersonId: updatedLead.salespersonId,
+                customerId: customer.id,
+                companyId: updatedLead.companyId,
+                probability: 100,
+                projectGenerated: true,
+                complianceStatus: 'HEAD_APPROVED'
+            }
+        });
+
+        // Generate temp project ID
+        const tempProjectId = `PRJ-${Date.now().toString().slice(-6)}`;
+        const project = await prisma.project.create({
+            data: {
+                projectId: tempProjectId,
+                name: `Project: ${updatedLead.name}`,
+                dealId: deal.id,
+                companyId: updatedLead.companyId,
+                status: 'Active'
+            }
+        });
+
+        // Notify tech team via Task
+        await prisma.task.create({
+            data: {
+                title: `New Project Generated: ${tempProjectId}`,
+                type: 'System',
+                linkedType: 'Project',
+                linkedId: project.id,
+                linkedTo: project.name,
+                assignedTo: 'Tech Team',
+                dueDate: new Date(Date.now() + 24 * 60 * 60 * 1000),
+                dueTime: "10:00",
+                status: "Pending",
+                priority: "High",
+                notes: `Project ${tempProjectId} created for Won lead ${updatedLead.name}. Please provision the project workspace.`,
+                companyId: updatedLead.companyId,
             }
         });
 
@@ -3045,11 +3264,11 @@ class LeadService {
             companyId,
             actorUserId: userId,
             action: 'UPDATE',
-            message: 'Lead compliance fully approved.',
+            message: 'Lead compliance fully approved. Customer, Deal and Temp Project generated.',
             changes: { complianceStatus: { from: lead.complianceStatus, to: 'APPROVED' }, comments }
         });
 
-        return { nextStatus: 'APPROVED', lead: updatedLead };
+        return { nextStatus: 'APPROVED', lead: updatedLead, tempProjectId };
     }
 
     async getPendingApprovals(companyId, userId, role) {
@@ -3061,8 +3280,10 @@ class LeadService {
         } else if (normalizedRole === EMPLOYEE_ROLES.HEAD_OF_DEPARTMENT) {
             statusFilter = ['HEAD_APPROVAL'];
         } else if (normalizedRole === EMPLOYEE_ROLES.COMPANY_ADMIN) {
-            statusFilter = ['TL_VERIFICATION', 'HEAD_APPROVAL'];
-        } else {
+            statusFilter = ['TL_VERIFICATION', 'HEAD_APPROVAL', 'ADMIN_APPROVAL'];
+        }
+
+        if (statusFilter.length === 0) {
             return []; // Other roles don't see approvals
         }
 
