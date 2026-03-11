@@ -35,7 +35,49 @@ const getMe = async (req, res, next) => {
     }
 };
 
+const getGoogleLoginUrl = async (req, res, next) => {
+    try {
+        const state = req.query?.state || null;
+        const url = await authService.getGoogleLoginUrl(state);
+        res.status(200).json({
+            success: true,
+            data: { url }
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: error.message
+        });
+    }
+};
+
+const googleLogin = async (req, res, next) => {
+    try {
+        const { code } = req.body;
+
+        if (!code) {
+            return res.status(400).json({
+                success: false,
+                message: 'Google authorization code is required'
+            });
+        }
+
+        const result = await authService.googleLogin(code);
+        res.status(200).json({
+            success: true,
+            data: result
+        });
+    } catch (error) {
+        res.status(401).json({
+            success: false,
+            message: error.message
+        });
+    }
+};
+
 module.exports = {
     login,
-    getMe
+    getMe,
+    getGoogleLoginUrl,
+    googleLogin
 };
