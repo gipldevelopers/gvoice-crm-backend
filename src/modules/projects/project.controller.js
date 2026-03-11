@@ -112,6 +112,171 @@ class ProjectController {
             });
         }
     }
+
+    async acknowledgeProject(req, res) {
+        try {
+            const { id } = req.params;
+            const companyId = req.user.companyId;
+
+            const updatedProject = await projectService.acknowledgeProject(id, companyId);
+            return res.status(200).json({
+                success: true,
+                message: 'Project acknowledged successfully',
+                data: updatedProject,
+            });
+        } catch (error) {
+            console.error('Error in acknowledgeProject:', error);
+            return res.status(error.message === 'Project not found' ? 404 : 500).json({
+                success: false,
+                message: error.message || 'Error acknowledging project',
+            });
+        }
+    }
+
+    async assignPM(req, res) {
+        try {
+            const { id } = req.params;
+            const { pmAssignedId } = req.body;
+            const companyId = req.user.companyId;
+
+            if (!pmAssignedId) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Missing required field: pmAssignedId',
+                });
+            }
+
+            const updatedProject = await projectService.assignPM(id, pmAssignedId, companyId);
+            return res.status(200).json({
+                success: true,
+                message: 'PM assigned successfully',
+                data: updatedProject,
+            });
+        } catch (error) {
+            console.error('Error in assignPM:', error);
+            return res.status(error.message === 'Project not found' ? 404 : 500).json({
+                success: false,
+                message: error.message || 'Error assigning PM',
+            });
+        }
+    }
+
+    async saveProjectPlan(req, res) {
+        try {
+            const { id } = req.params;
+            const companyId = req.user.companyId;
+            const planData = req.body;
+
+            const updatedProject = await projectService.saveProjectPlan(id, planData, companyId);
+            return res.status(200).json({
+                success: true,
+                message: 'Project plan saved successfully',
+                data: updatedProject,
+            });
+        } catch (error) {
+            console.error('Error in saveProjectPlan:', error);
+            return res.status(error.message === 'Project not found' ? 404 : 500).json({
+                success: false,
+                message: error.message || 'Error saving project plan',
+            });
+        }
+    }
+
+    async lockProjectPlan(req, res) {
+        try {
+            const { id } = req.params;
+            const companyId = req.user.companyId;
+            const userRole = req.user.role;
+
+            // Only Tech Lead (TL), Admin, or HOD can lock/approve
+            const authorizedRoles = ['company_admin', 'head_of_department', 'team_leader'];
+            if (!authorizedRoles.includes(userRole)) {
+                return res.status(403).json({
+                    success: false,
+                    message: 'Forbidden: Tech Lead or Admin approval required to lock plan',
+                });
+            }
+
+            const updatedProject = await projectService.lockProjectPlan(id, companyId);
+            return res.status(200).json({
+                success: true,
+                message: 'Project plan locked and approved successfully',
+                data: updatedProject,
+            });
+        } catch (error) {
+            console.error('Error in lockProjectPlan:', error);
+            return res.status(error.message === 'Project not found' ? 404 : 500).json({
+                success: false,
+                message: error.message || 'Error locking project plan',
+            });
+        }
+    }
+
+    // ─── STAGE 8: TASK EXECUTION ENGINE ─────────────────────────────────────────
+
+    async getMyTasks(req, res) {
+        try {
+            const userId = req.user.id;
+            const companyId = req.user.companyId;
+            const tasks = await projectService.getMyTasks(userId, companyId);
+            return res.status(200).json({ success: true, data: tasks });
+        } catch (error) {
+            console.error('Error in getMyTasks:', error);
+            return res.status(500).json({ success: false, message: error.message });
+        }
+    }
+
+    async getProjectTasks(req, res) {
+        try {
+            const { id } = req.params;
+            const companyId = req.user.companyId;
+            // Auto-check escalations on each fetch
+            await projectService.checkAndEscalateTasks(companyId);
+            const result = await projectService.getProjectTasks(id, companyId);
+            return res.status(200).json({ success: true, ...result });
+        } catch (error) {
+            console.error('Error in getProjectTasks:', error);
+            return res.status(500).json({ success: false, message: error.message });
+        }
+    }
+
+    async acceptTask(req, res) {
+        try {
+            const { taskId } = req.params;
+            const userId = req.user.id;
+            const companyId = req.user.companyId;
+            const task = await projectService.acceptTask(taskId, userId, companyId);
+            return res.status(200).json({ success: true, message: 'Task accepted successfully', data: task });
+        } catch (error) {
+            console.error('Error in acceptTask:', error);
+            return res.status(400).json({ success: false, message: error.message });
+        }
+    }
+
+    async updateTaskStatus(req, res) {
+        try {
+            const { taskId } = req.params;
+            const { status } = req.body;
+            const userId = req.user.id;
+            const companyId = req.user.companyId;
+            const task = await projectService.updateTaskStatus(taskId, userId, status, companyId);
+            return res.status(200).json({ success: true, message: 'Task status updated', data: task });
+        } catch (error) {
+            console.error('Error in updateTaskStatus:', error);
+            return res.status(400).json({ success: false, message: error.message });
+        }
+    }
+
+    async checkEscalations(req, res) {
+        try {
+            const companyId = req.user.companyId;
+            const result = await projectService.checkAndEscalateTasks(companyId);
+            return res.status(200).json({ success: true, ...result });
+        } catch (error) {
+            console.error('Error in checkEscalations:', error);
+            return res.status(500).json({ success: false, message: error.message });
+        }
+    }
 }
 
 module.exports = new ProjectController();

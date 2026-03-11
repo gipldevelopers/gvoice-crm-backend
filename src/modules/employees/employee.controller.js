@@ -2,11 +2,15 @@ const employeeService = require('./employee.service');
 
 const getEmployees = async (req, res) => {
     try {
-        // If it's a global admin or company admin, they can see all companies or filter by one
-        const isGlobalAdmin = req.user.role === 'admin' || req.user.role === 'company_admin';
+        // If it's a global admin (admin), they can see all companies or filter.
+        // Company admins are restricted to their own companyId.
+        let targetCompanyId = req.user.companyId;
+        if (req.user.rawRole === 'admin') {
+            targetCompanyId = req.query.companyId || 'all';
+        }
 
         const filters = {
-            companyId: isGlobalAdmin ? (req.query.companyId || 'all') : req.user.companyId,
+            companyId: targetCompanyId,
             department: req.query.department,
             role: req.query.role,
             status: req.query.status,
@@ -26,8 +30,7 @@ const getEmployees = async (req, res) => {
 const getEmployee = async (req, res) => {
     try {
         const { id } = req.params;
-        const isGlobalAdmin = req.user.role === 'admin' || req.user.role === 'company_admin';
-        const companyId = isGlobalAdmin ? null : req.user.companyId;
+        const companyId = req.user.rawRole === 'admin' ? null : req.user.companyId;
         const employee = await employeeService.getEmployeeById(id, companyId);
 
         if (!employee) {
@@ -42,12 +45,14 @@ const getEmployee = async (req, res) => {
 
 const createEmployee = async (req, res) => {
     try {
-        const isGlobalAdmin = req.user.role === 'admin' || req.user.role === 'company_admin';
-        // For global admin, use companyId from body. For others, use their own companyId.
-        const targetCompanyId = isGlobalAdmin ? req.body.companyId : req.user.companyId;
+        // Determine target company: prioritise body for super-admins, fallback to current user's company
+        let targetCompanyId = req.body.companyId;
+        if (!targetCompanyId || req.user.rawRole !== 'admin') {
+            targetCompanyId = req.user.companyId;
+        }
 
         if (!targetCompanyId) {
-            throw new Error('companyId is required');
+            return res.status(400).json({ success: false, message: 'companyId is required' });
         }
 
         const employeeData = { ...req.body, companyId: targetCompanyId };
@@ -62,8 +67,7 @@ const createEmployee = async (req, res) => {
 const updateEmployee = async (req, res) => {
     try {
         const { id } = req.params;
-        const isGlobalAdmin = req.user.role === 'admin' || req.user.role === 'company_admin';
-        const companyId = isGlobalAdmin ? null : req.user.companyId;
+        const companyId = req.user.rawRole === 'admin' ? null : req.user.companyId;
 
         const result = await employeeService.updateEmployee(id, req.body, companyId);
 
@@ -87,8 +91,13 @@ const patchEmployeeStatus = async (req, res) => {
         }
 
         const prisma = require('../../database/prisma');
+        const where = { id };
+        if (req.user.rawRole !== 'admin') {
+            where.companyId = req.user.companyId;
+        }
+
         const updated = await prisma.user.updateMany({
-            where: { id },
+            where,
             data: { status }
         });
 
@@ -105,8 +114,7 @@ const patchEmployeeStatus = async (req, res) => {
 const deleteEmployee = async (req, res) => {
     try {
         const { id } = req.params;
-        const isGlobalAdmin = req.user.role === 'admin' || req.user.role === 'company_admin';
-        const companyId = isGlobalAdmin ? null : req.user.companyId;
+        const companyId = req.user.rawRole === 'admin' ? null : req.user.companyId;
 
         const result = await employeeService.deleteEmployee(id, companyId);
 
@@ -122,8 +130,7 @@ const deleteEmployee = async (req, res) => {
 
 const getDepartments = async (req, res) => {
     try {
-        const isGlobalAdmin = req.user.role === 'admin' || req.user.role === 'company_admin';
-        const companyId = isGlobalAdmin
+        const companyId = req.user.rawRole === 'admin'
             ? (req.query.companyId || req.user.companyId)
             : req.user.companyId;
 
@@ -136,8 +143,7 @@ const getDepartments = async (req, res) => {
 
 const getHierarchy = async (req, res) => {
     try {
-        const isGlobalAdmin = req.user.role === 'admin' || req.user.role === 'company_admin';
-        const companyId = isGlobalAdmin
+        const companyId = req.user.rawRole === 'admin'
             ? (req.query.companyId || req.user.companyId)
             : req.user.companyId;
 
@@ -150,8 +156,7 @@ const getHierarchy = async (req, res) => {
 
 const getPotentialManagers = async (req, res) => {
     try {
-        const isGlobalAdmin = req.user.role === 'admin' || req.user.role === 'company_admin';
-        const companyId = isGlobalAdmin
+        const companyId = req.user.rawRole === 'admin'
             ? (req.query.companyId || req.user.companyId)
             : req.user.companyId;
         const { role, department, excludeId } = req.query;

@@ -2944,12 +2944,25 @@ class LeadService {
             params.documentType = documentType;
         }
 
-        return prisma.leadDocument.findMany({
+        const documents = await prisma.leadDocument.findMany({
             where: params,
             include: {
                 uploader: { select: { id: true, fullName: true, email: true } },
             },
             orderBy: [{ documentType: 'asc' }, { version: 'desc' }],
+        });
+
+        // Strip OS absolute paths before returning to front-end
+        return documents.map(doc => {
+            let relativePath = doc.path;
+            const uploadsIndex = relativePath.indexOf('/uploads/');
+            if (uploadsIndex !== -1) {
+                relativePath = relativePath.substring(uploadsIndex);
+            }
+            return {
+                ...doc,
+                path: relativePath
+            };
         });
     }
 
