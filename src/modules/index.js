@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 
 // Import routes
+const demoRoutes = require('./demo/demo.routes');
 const authRoutes = require('./auth/auth.routes');
 const leadRoutes = require('./leads/lead.routes');
 const employeeRoutes = require('./employees/employee.routes');
@@ -28,4 +29,3 @@ router.use('/companies', companyRoutes);
 
 
 module.exports = router;
-
