@@ -641,6 +641,96 @@ class ProjectService {
         }
     }
 
+    async getTechDashboardStats(companyId) {
+        try {
+            // 1. Active Projects (Status = 'Active')
+            const activeProjects = await prisma.project.count({
+                where: { companyId, status: 'Active' }
+            });
+
+            // 2. Pending Activation (Won Deals that don't have projects yet)
+            const pendingActivation = await prisma.deal.count({
+                where: {
+                    companyId,
+                    stage: 'Won',
+                    projectGenerated: false
+                }
+            });
+
+            // 3. In Planning (Status = 'Planning Phase')
+            const planning = await prisma.project.count({
+                where: { companyId, status: 'Planning Phase' }
+            });
+
+            // 4. Escalated (escalatedToHead = true)
+            const escalated = await prisma.project.count({
+                where: { companyId, escalatedToHead: true }
+            });
+
+            // 5. Recent Activity
+            // We'll get latest projects, acknowledged ones, and PM assignments
+            const latestProjects = await prisma.project.findMany({
+                where: { companyId },
+                include: { pm: true },
+                orderBy: { updatedAt: 'desc' },
+                take: 5
+            });
+
+            const activities = latestProjects.map(p => {
+                let action = 'Project Updated';
+                let status = 'info';
+
+                if (!p.techLeadAcknowledge) {
+                    action = `New Project: ${p.name} pending activation`;
+                    status = 'warning';
+                } else if (p.status === 'Planning Phase' && !p.pmAssignedId) {
+                    action = `PM Assignment Pending for ${p.name}`;
+                    status = 'warning';
+                } else if (p.status === 'Planning Phase' && p.pmAssignedId) {
+                    action = `Planning Started by ${p.pm?.fullName} for ${p.name}`;
+                    status = 'success';
+                } else if (p.escalatedToHead) {
+                    action = `Escalation: ${p.name} needs attention`;
+                    status = 'danger';
+                } else if (p.status === 'Active') {
+                    action = `Project ${p.name} is now Active`;
+                    status = 'success';
+                }
+
+                const diffInMs = new Date() - new Date(p.updatedAt);
+                const diffInHours = Math.floor(diffInMs / (1000 * 60 * 60));
+                const diffInMins = Math.floor(diffInMs / (1000 * 60));
+                
+                let time = 'Just now';
+                if (diffInHours > 24) time = `${Math.floor(diffInHours / 24)} days ago`;
+                else if (diffInHours > 0) time = `${diffInHours} hours ago`;
+                else if (diffInMins > 0) time = `${diffInMins} mins ago`;
+
+                return { action, time, status };
+            });
+
+            // 6. Weekly Activity Data (Dummy for now but structured)
+            const weekDays = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
+            const weeklyStats = weekDays.map(day => ({
+                day,
+                count: Math.floor(Math.random() * 10) + 1 // Placeholder for real activity log count
+            }));
+
+            return {
+                stats: {
+                    activeProjects,
+                    pendingActivation,
+                    planning,
+                    escalated
+                },
+                recentActivities: activities,
+                weeklyStats
+            };
+        } catch (error) {
+            throw new Error(`Error fetching tech dashboard stats: ${error.message}`);
+        }
+    }
+
     async deleteProject(projectId, companyId) {
         try {
             const existingProject = await prisma.project.findFirst({

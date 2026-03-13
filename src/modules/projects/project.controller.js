@@ -211,6 +211,24 @@ class ProjectController {
             });
         }
     }
+
+    async getTechDashboardStats(req, res) {
+        try {
+            const companyId = req.user.companyId;
+            const stats = await projectService.getTechDashboardStats(companyId);
+            return res.status(200).json({
+                success: true,
+                message: 'Tech dashboard stats fetched successfully',
+                data: stats,
+            });
+        } catch (error) {
+            console.error('Error in getTechDashboardStats:', error);
+            return res.status(500).json({
+                success: false,
+                message: error.message || 'Error fetching tech dashboard stats',
+            });
+        }
+    }
 }
 
 module.exports = new ProjectController();

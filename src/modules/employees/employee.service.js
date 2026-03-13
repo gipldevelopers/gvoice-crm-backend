@@ -138,13 +138,21 @@ const validateReportingStructure = async ({
 
     const managerRole = normalizeRole(manager.role);
 
+    // Enforce department matching for all roles except Company Admin managers
+    if (managerRole !== EMPLOYEE_ROLES.COMPANY_ADMIN) {
+        if (manager.department?.toLowerCase() !== department.toLowerCase()) {
+            throw new Error(`Reporting manager must be in the same department ("${department}"). Selected manager is in "${manager.department}".`);
+        }
+    }
+
     if (normalizedRole === EMPLOYEE_ROLES.COMPANY_ADMIN) {
         throw new Error('Company Admin cannot have a reporting manager');
     }
 
     if (normalizedRole === EMPLOYEE_ROLES.HEAD_OF_DEPARTMENT) {
-        if (![EMPLOYEE_ROLES.COMPANY_ADMIN].includes(managerRole)) {
-            throw new Error('Head of Department can report only to Company Admin');
+        const isSameDept = manager.department?.toLowerCase() === department.toLowerCase();
+        if (![EMPLOYEE_ROLES.COMPANY_ADMIN].includes(managerRole) && !isSameDept) {
+            throw new Error(`Head of Department in "${department}" can report only to a Company Admin or a manager in the same department.`);
         }
         return manager;
     }
@@ -560,23 +568,49 @@ const getPotentialManagers = async (companyId, filters = {}) => {
         return [];
     }
 
-    const managerRolesByTargetRole = {
-        [EMPLOYEE_ROLES.HEAD_OF_DEPARTMENT]: [EMPLOYEE_ROLES.COMPANY_ADMIN],
-        [EMPLOYEE_ROLES.TEAM_LEADER]: [EMPLOYEE_ROLES.COMPANY_ADMIN, EMPLOYEE_ROLES.HEAD_OF_DEPARTMENT],
-        [EMPLOYEE_ROLES.EMPLOYEE]: [EMPLOYEE_ROLES.TEAM_LEADER, EMPLOYEE_ROLES.HEAD_OF_DEPARTMENT, EMPLOYEE_ROLES.COMPANY_ADMIN]
-    };
-
-    const allowedManagerRoles = managerRolesByTargetRole[normalizedRole] || [];
-    if (!allowedManagerRoles.length) return [];
-
-    const roleConditions = allowedManagerRoles.flatMap((roleValue) =>
-        getRoleFilterValues(roleValue).map((alias) => ({ role: { equals: alias, mode: 'insensitive' } }))
-    );
-
     const where = {
-        companyId,
-        OR: roleConditions
+        companyId
     };
+
+    const adminRoles = getRoleFilterValues(EMPLOYEE_ROLES.COMPANY_ADMIN);
+    const adminConditions = adminRoles.map(alias => ({ role: { equals: alias, mode: 'insensitive' } }));
+
+    if (normalizedRole === EMPLOYEE_ROLES.HEAD_OF_DEPARTMENT) {
+        // HOD reports to users in their own department OR Company Admins
+        // If department is provided, filter non-admin managers by it.
+        const deptFilter = department ? { department: { equals: department, mode: 'insensitive' } } : { department: { equals: 'Tech', mode: 'insensitive' } };
+        where.OR = [
+            deptFilter,
+            ...adminConditions
+        ];
+    } else {
+        // For other roles, determine additional allowed manager roles
+        const managerRolesByTargetRole = {
+            [EMPLOYEE_ROLES.TEAM_LEADER]: [EMPLOYEE_ROLES.HEAD_OF_DEPARTMENT],
+            [EMPLOYEE_ROLES.EMPLOYEE]: [EMPLOYEE_ROLES.TEAM_LEADER, EMPLOYEE_ROLES.HEAD_OF_DEPARTMENT]
+        };
+
+        const extraAllowedRoles = managerRolesByTargetRole[normalizedRole] || [];
+        const extraRoleConditions = extraAllowedRoles.flatMap((roleValue) =>
+            getRoleFilterValues(roleValue).map((alias) => ({ role: { equals: alias, mode: 'insensitive' } }))
+        );
+
+        // If department is provided, extra roles must belong to that department
+        const departmentalRoleConditions = (department && extraRoleConditions.length > 0)
+            ? extraRoleConditions.map(cond => ({
+                AND: [
+                    cond,
+                    { department: { equals: department, mode: 'insensitive' } }
+                ]
+            }))
+            : extraRoleConditions;
+
+        // ALWAYS include Company Admins (global) + department-specific managers
+        where.OR = [
+            ...adminConditions,
+            ...departmentalRoleConditions
+        ];
+    }
 
     if (excludeId) {
         where.NOT = { id: excludeId };
