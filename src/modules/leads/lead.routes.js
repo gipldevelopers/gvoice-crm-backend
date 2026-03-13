@@ -1,10 +1,10 @@
 const express = require('express');
 const router = express.Router();
 const leadController = require('./lead.controller');
-const { authenticate } = require('../../middleware/auth.middleware');
+const { authenticate, requireDepartment } = require('../../middleware/auth.middleware');
 const { leadDocumentUpload } = require('../../middleware/upload');
 
-router.use(authenticate);
+router.use(authenticate, requireDepartment('sales'));
 
 // Create a new lead
 router.post('/', leadController.createLead);

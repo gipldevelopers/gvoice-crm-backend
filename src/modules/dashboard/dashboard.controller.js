@@ -3,7 +3,7 @@ const dashboardService = require('./dashboard.service');
 class DashboardController {
     async getStats(req, res) {
         try {
-            const isGlobalAdmin = req.user.role === 'admin' || req.user.role === 'company_admin';
+            const isGlobalAdmin = req.user.isPlatformAdmin;
             let stats;
 
             if (isGlobalAdmin) {
@@ -29,7 +29,7 @@ class DashboardController {
 
     async getTrends(req, res) {
         try {
-            const isGlobalAdmin = req.user.role === 'admin' || req.user.role === 'company_admin';
+            const isGlobalAdmin = req.user.isPlatformAdmin;
             let trends;
 
             if (isGlobalAdmin) {
@@ -57,6 +57,9 @@ class DashboardController {
         try {
             const { page = 1, limit = 50 } = req.query;
             console.log('Fetching activities for page:', page, 'limit:', limit);
+            if (!req.user.isPlatformAdmin) {
+                return res.status(403).json({ success: false, message: 'Forbidden: Admin access required' });
+            }
             const data = await dashboardService.getGlobalActivities(page, limit);
             console.log('Activities found:', data.activities.length);
             return res.status(200).json({ success: true, data });
