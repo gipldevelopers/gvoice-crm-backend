@@ -31,7 +31,7 @@ const authenticate = async (req, res, next) => {
             rawRole,
             companyId: user.companyId,
             department: (user.department || '').toString().toLowerCase().trim(),
-            isPlatformAdmin: rawRole === 'admin',
+            isPlatformAdmin: rawRole === 'super_admin',
             isCompanyAdmin: normalizedRole === 'company_admin'
         };
         next();

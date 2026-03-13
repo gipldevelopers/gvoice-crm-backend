@@ -864,13 +864,13 @@ class LeadService {
         if (role === EMPLOYEE_ROLES.HEAD_OF_DEPARTMENT) {
             if (requester.reportsToId) {
                 const admin = await prisma.user.findFirst({
-                    where: { id: requester.reportsToId, companyId, role: { in: [EMPLOYEE_ROLES.COMPANY_ADMIN, 'admin'] } },
+                    where: { id: requester.reportsToId, companyId, role: { in: [EMPLOYEE_ROLES.COMPANY_ADMIN, 'super_admin'] } },
                     select: { id: true, fullName: true, email: true }
                 });
                 if (admin) return admin;
             }
             return await prisma.user.findFirst({
-                where: { companyId, role: { in: [EMPLOYEE_ROLES.COMPANY_ADMIN, 'admin'] } },
+                where: { companyId, role: { in: [EMPLOYEE_ROLES.COMPANY_ADMIN, 'super_admin'] } },
                 select: { id: true, fullName: true, email: true }
             });
         }
@@ -950,7 +950,7 @@ class LeadService {
         return prisma.user.findFirst({
             where: {
                 companyId,
-                role: { in: [EMPLOYEE_ROLES.HEAD_OF_DEPARTMENT, EMPLOYEE_ROLES.COMPANY_ADMIN, 'admin'] },
+                role: { in: [EMPLOYEE_ROLES.HEAD_OF_DEPARTMENT, EMPLOYEE_ROLES.COMPANY_ADMIN, 'super_admin'] },
                 NOT: { id: requesterId },
             },
             select: {
@@ -1919,7 +1919,7 @@ class LeadService {
                 targetUser = await prisma.user.findFirst({
                     where: {
                         companyId: companyId,
-                        role: { in: ['admin', EMPLOYEE_ROLES.COMPANY_ADMIN] },
+                        role: { in: ['super_admin', EMPLOYEE_ROLES.COMPANY_ADMIN] },
                         NOT: { id: requesterId },
                     },
                     select: {

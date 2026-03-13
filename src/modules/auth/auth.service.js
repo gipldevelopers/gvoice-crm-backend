@@ -117,7 +117,7 @@ const googleLogin = async (code) => {
     });
 
     if (!user) {
-        throw new Error('Access denied. Account is not created by admin');
+        throw new Error('Access denied. Account is not created by super admin');
     }
 
     const authResponse = await buildAuthResponse(user);
