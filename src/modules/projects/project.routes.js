@@ -15,5 +15,6 @@ router.post('/:id/acknowledge', projectController.acknowledgeProject);
 router.post('/:id/assign-pm', projectController.assignPM);
 router.post('/:id/save-plan', projectController.saveProjectPlan);
 router.post('/:id/lock-plan', projectController.lockProjectPlan);
+router.post('/:id/close', projectController.closeProject);
 
 module.exports = router;

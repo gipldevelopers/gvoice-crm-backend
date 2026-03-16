@@ -1,4 +1,5 @@
 const prisma = require('../../database/prisma');
+const { addEmailJob } = require('../../helpers/mailQueue');
 
 class ProjectService {
     async createProject(projectData, companyId) {
@@ -750,6 +751,70 @@ class ProjectService {
         } catch (error) {
             throw new Error(`Error deleting project: ${error.message}`);
         }
+    }
+
+    async closeProject(projectId, companyId, actorUser) {
+        const project = await prisma.project.findFirst({
+            where: { id: projectId, companyId },
+            include: {
+                deal: {
+                    include: {
+                        salesperson: { select: { id: true, fullName: true, email: true } },
+                        customer: {
+                            include: {
+                                lead: {
+                                    include: {
+                                        salesperson: { select: { id: true, fullName: true, email: true } }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        if (!project) throw new Error('Project not found');
+
+        const updatedProject = await prisma.project.update({
+            where: { id: projectId },
+            data: { status: 'Completed' }
+        });
+
+        const ownerEmail =
+            project.deal?.salesperson?.email ||
+            project.deal?.customer?.lead?.salesperson?.email ||
+            null;
+
+        const salesTlUsers = await prisma.user.findMany({
+            where: {
+                companyId,
+                department: { equals: 'sales', mode: 'insensitive' },
+                OR: [
+                    { role: { equals: 'team_leader', mode: 'insensitive' } },
+                    { role: { equals: 'manager', mode: 'insensitive' } }
+                ]
+            },
+            select: { email: true }
+        });
+
+        const recipients = [
+            ownerEmail,
+            ...salesTlUsers.map((u) => u.email)
+        ].filter(Boolean);
+
+        if (recipients.length) {
+            const subject = `Project Completed: ${project.name}`;
+            const text = `Project "${project.name}" (${project.projectId}) has been marked as completed by ${actorUser?.id || 'Tech Team'}.`;
+            const html = `<p>Project <strong>${project.name}</strong> (${project.projectId}) has been marked as completed.</p>`;
+            try {
+                await addEmailJob({ to: recipients, subject, html, text });
+            } catch (error) {
+                console.error('[ProjectService] Failed to queue completion email:', error.message);
+            }
+        }
+
+        return updatedProject;
     }
 }
 

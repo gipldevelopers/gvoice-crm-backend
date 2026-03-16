@@ -229,6 +229,35 @@ class ProjectController {
             });
         }
     }
+
+    async closeProject(req, res) {
+        try {
+            const { id } = req.params;
+            const companyId = req.user.companyId;
+            const userRole = req.user.role;
+
+            const authorizedRoles = ['company_admin', 'head_of_department', 'team_leader'];
+            if (!authorizedRoles.includes(userRole)) {
+                return res.status(403).json({
+                    success: false,
+                    message: 'Forbidden: Tech Lead or Admin required to close project',
+                });
+            }
+
+            const result = await projectService.closeProject(id, companyId, req.user);
+            return res.status(200).json({
+                success: true,
+                message: 'Project closed successfully',
+                data: result,
+            });
+        } catch (error) {
+            console.error('Error in closeProject:', error);
+            return res.status(error.message === 'Project not found' ? 404 : 500).json({
+                success: false,
+                message: error.message || 'Error closing project',
+            });
+        }
+    }
 }
 
 module.exports = new ProjectController();

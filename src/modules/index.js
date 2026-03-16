@@ -13,6 +13,9 @@ const dashboardRoutes = require('./dashboard/dashboard.routes');
 const googleRoutes = require('./google/google.routes');
 const projectRoutes = require('./projects/project.routes');
 const companyRoutes = require('./companies/company.routes');
+const eodRoutes = require('./eod/eod.routes');
+const techTaskRoutes = require('./tech-tasks/techTask.routes');
+const salesEodRoutes = require('./sales-eod/salesEod.routes');
 
 // Define routes
 
@@ -26,6 +29,9 @@ router.use('/dashboard', dashboardRoutes);
 router.use('/google', googleRoutes);
 router.use('/projects', projectRoutes);
 router.use('/companies', companyRoutes);
+router.use('/eod', eodRoutes);
+router.use('/tech-tasks', techTaskRoutes);
+router.use('/sales-eod', salesEodRoutes);
 
 
 module.exports = router;

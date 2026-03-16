@@ -21,6 +21,10 @@ model Company {
   tasks     Task[]
   deals     Deal[]
   projects  Project[]
+  eodEntries EodEntry[]
+  techTaskBatches TechTaskBatch[]
+  techTaskItems TechTaskItem[]
+  salesEodEntries SalesEodEntry[]
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -54,6 +58,10 @@ model User {
   leadApprovals LeadApproval[]
   assignedProjects Project[] @relation("AssignedPM")
   projectTasks     ProjectTask[] @relation("ProjectTaskAssignedTo")
+  eodEntries EodEntry[]
+  createdTechTaskBatches TechTaskBatch[] @relation("TechTaskBatchCreatedBy")
+  assignedTechTaskItems TechTaskItem[] @relation("TechTaskItemAssignedTo")
+  salesEodEntries SalesEodEntry[]
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
@@ -314,6 +322,7 @@ model Project {
   planLocked        Boolean  @default(false)
   planApproved      Boolean  @default(false)
   milestones        ProjectMilestone[]
+  techTaskBatches   TechTaskBatch[]
   
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
@@ -354,4 +363,87 @@ model ProjectTask {
   updatedAt   DateTime @updatedAt
 
   @@map("project_tasks")
+}
+
+model EodEntry {
+  id                 String   @id @default(uuid())
+  entryDate          DateTime
+  tasksWorked        Json?
+  hoursLogged        Float?
+  completionPercent  Int?
+  blockers           String?  @db.Text
+  productivityScore  Int?
+  productivityNotes  String?  @db.Text
+  userId             String
+  user               User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  companyId          String
+  company            Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@unique([userId, entryDate])
+  @@index([companyId, entryDate])
+  @@map("eod_entries")
+}
+
+model TechTaskBatch {
+  id            String   @id @default(uuid())
+  headTitle     String
+  projectId     String?
+  project       Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  companyId     String
+  company       Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  createdById   String
+  createdBy     User     @relation("TechTaskBatchCreatedBy", fields: [createdById], references: [id], onDelete: Cascade)
+  tasks         TechTaskItem[]
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([companyId, createdAt])
+  @@map("tech_task_batches")
+}
+
+model TechTaskItem {
+  id            String   @id @default(uuid())
+  batchId       String
+  batch         TechTaskBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  title         String
+  assignedToId  String?
+  assignedTo    User?    @relation("TechTaskItemAssignedTo", fields: [assignedToId], references: [id], onDelete: SetNull)
+  estimatedHours Float?
+  notes         String?  @db.Text
+  status        String   @default("Assigned")
+  completionNote String? @db.Text
+  completedAt   DateTime?
+  blockerNote   String?  @db.Text
+  blockedAt     DateTime?
+  failureNote   String?  @db.Text
+  failedAt      DateTime?
+  companyId     String
+  company       Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([companyId, assignedToId])
+  @@map("tech_task_items")
+}
+
+model SalesEodEntry {
+  id              String   @id @default(uuid())
+  entryDate       DateTime
+  leadsWorked     Json?
+  trackingItems   Json?
+  callsMade       Int?
+  progressUpdates String?  @db.Text
+  blockers        String?  @db.Text
+  userId          String
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  companyId       String
+  company         Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([userId, entryDate])
+  @@index([companyId, entryDate])
+  @@map("sales_eod_entries")
 }
