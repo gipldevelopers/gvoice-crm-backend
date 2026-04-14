@@ -154,9 +154,33 @@ const getUserById = async (id) => {
     return { ...safeUser, role: normalizeRole(safeUser.role) };
 };
 
+const changePassword = async (userId, currentPassword, newPassword) => {
+    const user = await prisma.user.findUnique({
+        where: { id: userId }
+    });
+
+    if (!user) {
+        throw new Error('User not found');
+    }
+
+    const isPasswordValid = await bcrypt.compare(currentPassword, user.password);
+    if (!isPasswordValid) {
+        throw new Error('Current password is incorrect');
+    }
+
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+    await prisma.user.update({
+        where: { id: userId },
+        data: { password: hashedPassword }
+    });
+
+    return true;
+};
+
 module.exports = {
     login,
     getUserById,
     getGoogleLoginUrl,
-    googleLogin
+    googleLogin,
+    changePassword
 };

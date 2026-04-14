@@ -21,7 +21,7 @@ const ROLE_LABELS = {
 
 const normalizeRole = (role) => {
     if (!role || typeof role !== 'string') return EMPLOYEE_ROLES.EMPLOYEE;
-    const lowered = role.trim().toLowerCase();
+    const lowered = role.trim().toLowerCase().replace(/[\s-]+/g, '_');
     return LEGACY_ROLE_ALIASES[lowered] || lowered;
 };
 

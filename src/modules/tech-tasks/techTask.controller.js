@@ -113,6 +113,41 @@ const createSelfTask = async (req, res, next) => {
     }
 };
 
+const listAllTasks = async (req, res, next) => {
+    try {
+        const tasks = await techTaskService.listAllTasks(req.user.companyId, req.user);
+        res.status(200).json({ success: true, data: tasks });
+    } catch (error) {
+        error.status = error.message?.startsWith('Forbidden') ? 403 : 400;
+        next(error);
+    }
+};
+
+const updateTaskItem = async (req, res, next) => {
+    try {
+        const task = await techTaskService.updateTaskItem(
+            req.params.id,
+            req.user.companyId,
+            req.user,
+            req.body
+        );
+        res.status(200).json({ success: true, message: 'Task updated', data: task });
+    } catch (error) {
+        error.status = error.message?.startsWith('Forbidden') ? 403 : 400;
+        next(error);
+    }
+};
+
+const deleteTaskItem = async (req, res, next) => {
+    try {
+        await techTaskService.deleteTaskItem(req.params.id, req.user.companyId, req.user);
+        res.status(200).json({ success: true, message: 'Task deleted' });
+    } catch (error) {
+        error.status = error.message?.startsWith('Forbidden') ? 403 : 400;
+        next(error);
+    }
+};
+
 module.exports = {
     createBatch,
     listBatches,
@@ -120,5 +155,8 @@ module.exports = {
     updateTaskStatus,
     listTodayTasks,
     getUserSummary,
-    createSelfTask
+    createSelfTask,
+    listAllTasks,
+    updateTaskItem,
+    deleteTaskItem
 };

@@ -75,9 +75,30 @@ const googleLogin = async (req, res, next) => {
     }
 };
 
+const changePassword = async (req, res, next) => {
+    try {
+        const { currentPassword, newPassword } = req.body;
+        if (!currentPassword || !newPassword) {
+            return res.status(400).json({ success: false, message: 'Current and new passwords are required' });
+        }
+
+        await authService.changePassword(req.user.id, currentPassword, newPassword);
+        res.status(200).json({
+            success: true,
+            message: 'Password changed successfully'
+        });
+    } catch (error) {
+        res.status(400).json({
+            success: false,
+            message: error.message
+        });
+    }
+};
+
 module.exports = {
     login,
     getMe,
     getGoogleLoginUrl,
-    googleLogin
+    googleLogin,
+    changePassword
 };

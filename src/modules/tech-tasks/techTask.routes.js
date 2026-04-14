@@ -8,10 +8,13 @@ router.use(authenticate, requireDepartment('tech'));
 
 router.post('/batch', validateCreateBatch, techTaskController.createBatch);
 router.get('/batch', techTaskController.listBatches);
+router.get('/all', techTaskController.listAllTasks);
 router.get('/my', techTaskController.listMyTasks);
 router.get('/today', techTaskController.listTodayTasks);
 router.get('/user/:id/summary', techTaskController.getUserSummary);
 router.post('/self', validateSelfTask, techTaskController.createSelfTask);
 router.patch('/items/:id/status', validateUpdateStatus, techTaskController.updateTaskStatus);
+router.put('/items/:id', techTaskController.updateTaskItem);
+router.delete('/items/:id', techTaskController.deleteTaskItem);
 
 module.exports = router;

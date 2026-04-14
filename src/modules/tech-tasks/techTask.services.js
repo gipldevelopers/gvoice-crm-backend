@@ -1,11 +1,12 @@
 const prisma = require('../../database/prisma');
-const { canAccessEmployees } = require('../../helpers/employeeHierarchy');
+const { canAccessEmployees, normalizeRole, EMPLOYEE_ROLES } = require('../../helpers/employeeHierarchy');
 
 const ensureAuthorized = (actorUser) => {
     if (actorUser?.isPlatformAdmin) {
         return;
     }
-    if (!canAccessEmployees(actorUser?.role)) {
+    const normalized = normalizeRole(actorUser?.role);
+    if (normalized !== EMPLOYEE_ROLES.COMPANY_ADMIN && normalized !== EMPLOYEE_ROLES.TEAM_LEADER) {
         throw new Error('Forbidden: Tech Lead or Admin access required');
     }
 };
@@ -274,6 +275,54 @@ const createSelfTask = async (companyId, userId, payload) => {
     return task;
 };
 
+const listAllTasks = async (companyId, actorUser) => {
+    ensureAuthorized(actorUser);
+    return prisma.techTaskItem.findMany({
+        where: { companyId },
+        include: {
+            assignedTo: { select: { id: true, fullName: true, email: true, role: true } },
+            batch: {
+                select: {
+                    id: true,
+                    headTitle: true,
+                    project: { select: { id: true, name: true, projectId: true } },
+                    createdBy: { select: { id: true, fullName: true } }
+                }
+            }
+        },
+        orderBy: { createdAt: 'desc' }
+    });
+};
+
+const updateTaskItem = async (taskId, companyId, actorUser, payload) => {
+    ensureAuthorized(actorUser);
+    const task = await prisma.techTaskItem.findFirst({ where: { id: taskId, companyId } });
+    if (!task) throw new Error('Task not found');
+
+    return prisma.techTaskItem.update({
+        where: { id: taskId },
+        data: {
+            title: payload.title ? String(payload.title).trim() : undefined,
+            assignedToId: payload.assignedToId || undefined,
+            estimatedHours: payload.estimatedHours !== undefined ? normalizeEstimatedHours(payload.estimatedHours) : undefined,
+            notes: payload.notes !== undefined ? payload.notes : undefined,
+            status: payload.status || undefined
+        },
+        include: {
+            assignedTo: { select: { id: true, fullName: true, email: true } },
+            batch: { select: { headTitle: true, project: { select: { id: true, name: true } } } }
+        }
+    });
+};
+
+const deleteTaskItem = async (taskId, companyId, actorUser) => {
+    ensureAuthorized(actorUser);
+    const task = await prisma.techTaskItem.findFirst({ where: { id: taskId, companyId } });
+    if (!task) throw new Error('Task not found');
+    await prisma.techTaskItem.delete({ where: { id: taskId } });
+    return { deleted: true };
+};
+
 module.exports = {
     createBatch,
     listBatches,
@@ -281,5 +330,8 @@ module.exports = {
     listTodayTasks,
     updateTaskStatus,
     getUserSummary,
-    createSelfTask
+    createSelfTask,
+    listAllTasks,
+    updateTaskItem,
+    deleteTaskItem
 };
