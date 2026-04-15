@@ -138,6 +138,15 @@ class ProjectController {
             const { id } = req.params;
             const { pmAssignedId } = req.body;
             const companyId = req.user.companyId;
+            const userRole = req.user.role;
+
+            const authorizedRoles = ['company_admin', 'head_of_department', 'team_leader'];
+            if (!authorizedRoles.includes(userRole)) {
+                return res.status(403).json({
+                    success: false,
+                    message: 'Forbidden: Only Admin or Team Leader can assign a PM',
+                });
+            }
 
             if (!pmAssignedId) {
                 return res.status(400).json({
