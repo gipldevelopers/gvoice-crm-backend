@@ -1,11 +1,11 @@
 const express = require('express');
 const dealController = require('./deal.controller');
-const { authenticate } = require('../../middleware/auth.middleware');
+const { authenticate, requireDepartment } = require('../../middleware/auth.middleware');
 const { dealDocumentUpload } = require('../../middleware/upload');
 
 const router = express.Router();
 
-router.use(authenticate);
+router.use(authenticate, requireDepartment('sales'));
 
 router.post('/', dealController.createDeal);
 router.get('/', dealController.getAllDeals);

@@ -4,7 +4,7 @@ node_modules/
 /build
 
 # Environment variables
-.env
+.env*
 
 # Debug logs
 npm-debug.log*
