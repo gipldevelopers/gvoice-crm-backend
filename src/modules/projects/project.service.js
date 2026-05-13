@@ -816,6 +816,163 @@ class ProjectService {
 
         return updatedProject;
     }
+
+    async getMyTasks(companyId, userId) {
+        try {
+            // 1. Fetch Project Tasks
+            const projectTasks = await prisma.projectTask.findMany({
+                where: {
+                    assignedToId: userId,
+                    milestone: {
+                        project: {
+                            companyId: companyId
+                        }
+                    }
+                },
+                include: {
+                    milestone: {
+                        include: {
+                            project: true
+                        }
+                    }
+                }
+            });
+
+            // 2. Fetch Tech Tasks (from EOD/Assignments)
+            const techTasks = await prisma.techTaskItem.findMany({
+                where: {
+                    assignedToId: userId,
+                    companyId: companyId
+                },
+                include: {
+                    batch: {
+                        include: {
+                            project: true
+                        }
+                    }
+                }
+            });
+
+            // 3. Normalize and Combine
+            const normalizedProjectTasks = projectTasks.map(t => ({
+                id: t.id,
+                title: t.title,
+                description: t.description,
+                deadline: t.deadline,
+                status: t.status,
+                priority: t.priority,
+                type: 'Project',
+                projectName: t.milestone?.project?.name,
+                projectId: t.milestone?.project?.id,
+                milestoneName: t.milestone?.title,
+                createdAt: t.createdAt,
+                // UI Fields
+                acceptedAt: t.status !== 'Pending' ? t.updatedAt : null,
+                acceptanceStatus: t.status === 'Pending' ? 'Pending' : 'Accepted',
+                acceptanceDueAt: new Date(new Date(t.createdAt).getTime() + 8 * 60 * 60 * 1000), // 8 hours TAT
+                isAcceptanceOverdue: t.status === 'Pending' && (new Date() - new Date(t.createdAt) > 8 * 60 * 60 * 1000)
+            }));
+
+            const normalizedTechTasks = techTasks.map(t => ({
+                id: t.id,
+                title: t.title,
+                description: t.notes,
+                deadline: t.batch?.createdAt, 
+                status: t.status === 'Assigned' ? 'Pending' : t.status,
+                priority: 'Medium',
+                type: 'Technical',
+                projectName: t.batch?.project?.name || 'Internal / Other',
+                projectId: t.batch?.project?.id,
+                milestoneName: t.batch?.headTitle,
+                createdAt: t.createdAt,
+                estimatedHours: t.estimatedHours,
+                // UI Fields
+                acceptedAt: t.status !== 'Assigned' ? t.updatedAt : null,
+                acceptanceStatus: t.status === 'Assigned' ? 'Pending' : 'Accepted',
+                acceptanceDueAt: new Date(new Date(t.createdAt).getTime() + 8 * 60 * 60 * 1000), // 8 hours TAT
+                isAcceptanceOverdue: t.status === 'Assigned' && (new Date() - new Date(t.createdAt) > 8 * 60 * 60 * 1000)
+            }));
+
+            const combined = [...normalizedProjectTasks, ...normalizedTechTasks];
+            combined.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+            return combined;
+        } catch (error) {
+            throw new Error(`Error fetching my tasks: ${error.message}`);
+        }
+    }
+
+    async acceptTask(taskId, userId) {
+        // Try Project Task first
+        const pTask = await prisma.projectTask.findUnique({ where: { id: taskId } });
+        if (pTask) {
+            if (pTask.assignedToId !== userId) throw new Error('Forbidden: Not assigned to you');
+            return prisma.projectTask.update({
+                where: { id: taskId },
+                data: { status: 'Accepted' }
+            });
+        }
+
+        // Try Tech Task
+        const tTask = await prisma.techTaskItem.findUnique({ where: { id: taskId } });
+        if (tTask) {
+            if (tTask.assignedToId !== userId) throw new Error('Forbidden: Not assigned to you');
+            return prisma.techTaskItem.update({
+                where: { id: taskId },
+                data: { status: 'In Progress' } // Tech tasks go straight to In Progress on acceptance
+            });
+        }
+
+        throw new Error('Task not found');
+    }
+
+    async updateTaskStatus(taskId, userId, status) {
+        // Try Project Task
+        const pTask = await prisma.projectTask.findUnique({ where: { id: taskId } });
+        if (pTask) {
+            if (pTask.assignedToId !== userId) throw new Error('Forbidden: Not assigned to you');
+            return prisma.projectTask.update({
+                where: { id: taskId },
+                data: { status }
+            });
+        }
+
+        // Try Tech Task
+        const tTask = await prisma.techTaskItem.findUnique({ where: { id: taskId } });
+        if (tTask) {
+            if (tTask.assignedToId !== userId) throw new Error('Forbidden: Not assigned to you');
+            return prisma.techTaskItem.update({
+                where: { id: taskId },
+                data: { status }
+            });
+        }
+
+        throw new Error('Task not found');
+    }
+
+    async addTaskNote(taskId, userId, note) {
+        // Try Project Task - ProjectTask doesn't have a notes field, so we might append to description or ignore
+        // For now, let's just handle Tech Tasks which have a notes/completionNote field
+        const tTask = await prisma.techTaskItem.findUnique({ where: { id: taskId } });
+        if (tTask) {
+            if (tTask.assignedToId !== userId) throw new Error('Forbidden: Not assigned to you');
+            return prisma.techTaskItem.update({
+                where: { id: taskId },
+                data: { notes: tTask.notes ? `${tTask.notes}\n\nNote: ${note}` : note }
+            });
+        }
+
+        const pTask = await prisma.projectTask.findUnique({ where: { id: taskId } });
+        if (pTask) {
+            if (pTask.assignedToId !== userId) throw new Error('Forbidden: Not assigned to you');
+            return prisma.projectTask.update({
+                where: { id: taskId },
+                data: { description: pTask.description ? `${pTask.description}\n\nNote: ${note}` : note }
+            });
+        }
+
+        throw new Error('Task not found');
+    }
 }
 
 module.exports = new ProjectService();

@@ -267,6 +267,70 @@ class ProjectController {
             });
         }
     }
+
+    async getMyTasks(req, res) {
+        try {
+            const companyId = req.user.companyId;
+            const userId = req.user.id;
+
+            const tasks = await projectService.getMyTasks(companyId, userId);
+            return res.status(200).json({
+                success: true,
+                message: 'My tasks fetched successfully',
+                data: tasks,
+            });
+        } catch (error) {
+            console.error('Error in getMyTasks:', error);
+            return res.status(500).json({
+                success: false,
+                message: error.message || 'Error fetching tasks',
+            });
+        }
+    }
+
+    async acceptTask(req, res) {
+        try {
+            const { id } = req.params;
+            const userId = req.user.id;
+            const task = await projectService.acceptTask(id, userId);
+            return res.status(200).json({ success: true, data: task });
+        } catch (error) {
+            return res.status(error.message?.startsWith('Forbidden') ? 403 : 500).json({
+                success: false,
+                message: error.message
+            });
+        }
+    }
+
+    async updateTaskStatus(req, res) {
+        try {
+            const { id } = req.params;
+            const { status } = req.body;
+            const userId = req.user.id;
+            const task = await projectService.updateTaskStatus(id, userId, status);
+            return res.status(200).json({ success: true, data: task });
+        } catch (error) {
+            return res.status(error.message?.startsWith('Forbidden') ? 403 : 500).json({
+                success: false,
+                message: error.message
+            });
+        }
+    }
+
+    async addTaskNote(req, res) {
+        try {
+            const { id } = req.params;
+            const { note } = req.body;
+            const userId = req.user.id;
+            const task = await projectService.addTaskNote(id, userId, note);
+            return res.status(200).json({ success: true, data: task });
+        } catch (error) {
+            return res.status(error.message?.startsWith('Forbidden') ? 403 : 500).json({
+                success: false,
+                message: error.message
+            });
+        }
+    }
 }
 
 module.exports = new ProjectController();

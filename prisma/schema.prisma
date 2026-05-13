@@ -25,10 +25,23 @@ model Company {
   techTaskBatches TechTaskBatch[]
   techTaskItems TechTaskItem[]
   salesEodEntries SalesEodEntry[]
+  departments Department[]
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@map("companies")
+}
+
+model Department {
+  id        String   @id @default(uuid())
+  name      String
+  companyId String
+  company   Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([companyId, name])
+  @@map("departments")
 }
 
 model User {

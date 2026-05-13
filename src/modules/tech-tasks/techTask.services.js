@@ -277,7 +277,9 @@ const createSelfTask = async (companyId, userId, payload) => {
 
 const listAllTasks = async (companyId, actorUser) => {
     ensureAuthorized(actorUser);
-    return prisma.techTaskItem.findMany({
+    
+    // 1. Fetch Tech Tasks
+    const techTasks = await prisma.techTaskItem.findMany({
         where: { companyId },
         include: {
             assignedTo: { select: { id: true, fullName: true, email: true, role: true } },
@@ -292,6 +294,53 @@ const listAllTasks = async (companyId, actorUser) => {
         },
         orderBy: { createdAt: 'desc' }
     });
+
+    // 2. Fetch Project Tasks
+    const projectTasks = await prisma.projectTask.findMany({
+        where: {
+            milestone: {
+                project: {
+                    companyId: companyId
+                }
+            }
+        },
+        include: {
+            assignedTo: { select: { id: true, fullName: true, email: true, role: true } },
+            milestone: {
+                include: {
+                    project: { select: { id: true, name: true, projectId: true } }
+                }
+            }
+        }
+    });
+
+    // 3. Normalize and Combine
+    const normalizedTech = techTasks.map(t => ({
+        ...t,
+        type: 'Technical',
+        projectName: t.batch?.project?.name || 'Internal'
+    }));
+
+    const normalizedProject = projectTasks.map(t => ({
+        id: t.id,
+        title: t.title,
+        status: t.status,
+        createdAt: t.createdAt,
+        updatedAt: t.updatedAt,
+        assignedTo: t.assignedTo,
+        batch: {
+            id: t.milestone?.id,
+            headTitle: t.milestone?.title,
+            project: t.milestone?.project
+        },
+        type: 'Project',
+        projectName: t.milestone?.project?.name || 'Project'
+    }));
+
+    const combined = [...normalizedTech, ...normalizedProject];
+    combined.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+    return combined;
 };
 
 const updateTaskItem = async (taskId, companyId, actorUser, payload) => {

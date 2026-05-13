@@ -12,6 +12,7 @@ const {
     leadQualifiedStatusDecisionTemplate,
     newLeadCreatedTemplate,
 } = require('../../helpers/leadEmailTemplates');
+const { formatInSystemTimezone } = require('../../helpers/date.helper');
 
 const LEAD_TIMER_DAYS = 15;
 const MILLISECONDS_IN_DAY = 24 * 60 * 60 * 1000;
@@ -1711,8 +1712,7 @@ class LeadService {
             }
 
             let nextNotes = existingLead.notes;
-            const now = new Date();
-            const formattedDate = `${now.toLocaleDateString()} ${now.toLocaleTimeString()}`;
+            const formattedDate = formatInSystemTimezone();
             const formattedNote = `[${formattedDate}] Status changed to ${status}: ${note}`;
             nextNotes = existingLead.notes ? `${existingLead.notes}\n\n${formattedNote}` : formattedNote;
 
@@ -2858,7 +2858,7 @@ class LeadService {
             });
 
             if (decision === 'approve') {
-                const formattedDate = `${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString()}`;
+                const formattedDate = formatInSystemTimezone();
                 const formattedNote = `[${formattedDate}] Status changed to Qualified by approval from ${actor.fullName}: ${note}`;
                 const nextNotes = lead.notes ? `${lead.notes}\n\n${formattedNote}` : formattedNote;
 

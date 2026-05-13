@@ -7,6 +7,7 @@ router.use(authenticate, requireDepartment('tech'));
 
 router.post('/', projectController.createProject);
 router.get('/', projectController.getAllProjects);
+router.get('/my-tasks', projectController.getMyTasks);
 router.get('/stats', projectController.getTechDashboardStats);
 router.get('/:id', projectController.getProjectById);
 router.put('/:id', projectController.updateProject);
@@ -16,5 +17,10 @@ router.post('/:id/assign-pm', projectController.assignPM);
 router.post('/:id/save-plan', projectController.saveProjectPlan);
 router.post('/:id/lock-plan', projectController.lockProjectPlan);
 router.post('/:id/close', projectController.closeProject);
+
+// Task-specific routes (used by Task Execution Engine)
+router.post('/tasks/:id/accept', projectController.acceptTask);
+router.patch('/tasks/:id/status', projectController.updateTaskStatus);
+router.post('/tasks/:id/notes', projectController.addTaskNote);
 
 module.exports = router;

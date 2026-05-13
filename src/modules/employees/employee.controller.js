@@ -87,6 +87,14 @@ const patchEmployeeStatus = async (req, res) => {
         const { id } = req.params;
         const { status } = req.body;
 
+        // Prevent users from deactivating their own account
+        if (id === req.user.id && (status === 'inactive' || status === 'suspended')) {
+            return res.status(403).json({
+                success: false,
+                message: "Security Restriction: You cannot suspend your own active administrator account."
+            });
+        }
+
         if (!status || !['active', 'inactive', 'suspended'].includes(status)) {
             return res.status(400).json({ success: false, message: 'Invalid status value.' });
         }
@@ -114,6 +122,15 @@ const patchEmployeeStatus = async (req, res) => {
 const deleteEmployee = async (req, res) => {
     try {
         const { id } = req.params;
+
+        // Prevent users from deleting their own account
+        if (id === req.user.id) {
+            return res.status(403).json({
+                success: false,
+                message: "Security Restriction: You cannot delete your own active administrator account."
+            });
+        }
+
         const isGlobalAdmin = req.user.isPlatformAdmin;
         const companyId = isGlobalAdmin ? null : req.user.companyId;
 

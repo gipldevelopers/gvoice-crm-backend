@@ -5,6 +5,8 @@ const {
     ROLE_LABELS,
     normalizeRole
 } = require('../../helpers/employeeHierarchy');
+const { addEmailJob } = require('../../helpers/mailQueue');
+const { newUserWelcomeTemplate } = require('../../helpers/employeeEmailTemplates');
 
 const EMPLOYEE_SELECT = {
     id: true,
@@ -321,7 +323,7 @@ const createEmployee = async (data) => {
             email: email.trim().toLowerCase(),
             phone: phone || null,
             password: hashedPassword,
-            department: normalizedRole === EMPLOYEE_ROLES.COMPANY_ADMIN ? null : (department || null),
+            department: department || null,
             teamName: resolveTeamNameForUser({
                 role: normalizedRole,
                 inputTeamName: teamName,
@@ -335,7 +337,29 @@ const createEmployee = async (data) => {
         select: EMPLOYEE_SELECT
     });
 
-    return mapEmployee(employee);
+    const mappedEmployee = mapEmployee(employee);
+
+    // Send welcome email
+    try {
+        const emailTemplate = newUserWelcomeTemplate({
+            fullName: employee.fullName,
+            username: employee.username,
+            password: password, // Original plain password
+            companyName: employee.company?.name || 'Gvoice CRM',
+            roleLabel: mappedEmployee.roleLabel
+        });
+
+        await addEmailJob({
+            to: employee.email,
+            subject: emailTemplate.subject,
+            html: emailTemplate.html
+        });
+    } catch (emailError) {
+        console.error(`[createEmployee] Failed to queue welcome email for ${employee.email}:`, emailError.message);
+        // We don't throw here to avoid rolling back user creation if email fails
+    }
+
+    return mappedEmployee;
 };
 
 const updateEmployee = async (id, data, companyId) => {
@@ -368,7 +392,7 @@ const updateEmployee = async (id, data, companyId) => {
 
     const targetCompanyId = existing.companyId;
     const normalizedRole = normalizeRole(role || existing.role);
-    const normalizedDepartment = normalizedRole === EMPLOYEE_ROLES.COMPANY_ADMIN ? null : (department || null);
+    const normalizedDepartment = department || null;
     const normalizedManagerId = reportsToId === '' ? null : reportsToId;
 
     if (normalizedRole === EMPLOYEE_ROLES.HEAD_OF_DEPARTMENT) {
@@ -556,11 +580,16 @@ const getHierarchy = async (companyId) => {
 };
 
 const getPotentialManagers = async (companyId, filters = {}) => {
-    const {
+    let {
         role = EMPLOYEE_ROLES.EMPLOYEE,
         department = null,
         excludeId = null
     } = filters;
+
+    // Normalize department: empty string or literal 'undefined'/'null' should be null
+    if (department === '' || department === 'undefined' || department === 'null' || department === 'none') {
+        department = null;
+    }
 
     const normalizedRole = normalizeRole(role);
 
@@ -577,10 +606,9 @@ const getPotentialManagers = async (companyId, filters = {}) => {
 
     if (normalizedRole === EMPLOYEE_ROLES.HEAD_OF_DEPARTMENT) {
         // HOD reports to users in their own department OR Company Admins
-        // If department is provided, filter non-admin managers by it.
-        const deptFilter = department ? { department: { equals: department, mode: 'insensitive' } } : { department: { equals: 'Tech', mode: 'insensitive' } };
+        const deptFilter = department ? { department: { equals: department, mode: 'insensitive' } } : null;
         where.OR = [
-            deptFilter,
+            ...(deptFilter ? [deptFilter] : []),
             ...adminConditions
         ];
     } else {
