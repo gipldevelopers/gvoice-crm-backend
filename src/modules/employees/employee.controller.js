@@ -4,6 +4,7 @@ const getEmployees = async (req, res) => {
     try {
         // Only platform admin can query across companies
         const isGlobalAdmin = req.user.isPlatformAdmin;
+        const targetCompanyId = isGlobalAdmin ? null : req.user.companyId;
 
         const filters = {
             companyId: targetCompanyId,

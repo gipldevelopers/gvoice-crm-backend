@@ -5,13 +5,33 @@ class ProjectService {
     async createProject(projectData, companyId) {
         try {
             const tempProjectId = `PRJ-${Date.now().toString().slice(-6)}`;
+
+            let dealId = projectData.dealId;
+            const wantsInHouse = !!projectData.inHouse;
+
+            if (!dealId && wantsInHouse) {
+                const createdDeal = await prisma.deal.create({
+                    data: {
+                        title: projectData.name,
+                        value: 0,
+                        stage: 'Won',
+                        notes: projectData.notes || 'In-house project (created from Tech)',
+                        companyId: companyId,
+                        projectGenerated: true,
+                    },
+                });
+                dealId = createdDeal.id;
+            }
+
             const project = await prisma.project.create({
                 data: {
                     projectId: projectData.projectId || tempProjectId,
                     name: projectData.name,
-                    dealId: projectData.dealId,
+                    dealId,
                     companyId: companyId,
-                    status: projectData.status || 'Active'
+                    status: projectData.status || 'Active',
+                    ...(projectData.pmAssignedId ? { pmAssignedId: projectData.pmAssignedId } : {}),
+                    ...(wantsInHouse ? { department: 'tech' } : {}),
                 },
                 include: {
                     deal: {
@@ -23,16 +43,67 @@ class ProjectService {
                 }
             });
 
-            // Update deal to mark project as generated
-            await prisma.deal.update({
-                where: { id: projectData.dealId },
-                data: { projectGenerated: true }
-            });
+            // Update existing deal to mark project as generated (in-house deals are created with projectGenerated=true)
+            if (projectData.dealId) {
+                await prisma.deal.update({
+                    where: { id: projectData.dealId },
+                    data: { projectGenerated: true }
+                });
+            }
 
             return project;
         } catch (error) {
             throw new Error(`Error creating project: ${error.message}`);
         }
+    }
+
+    async uploadProjectDocuments({ projectId, companyId, documentType, files, uploadedBy }) {
+        const project = await prisma.project.findFirst({
+            where: { id: projectId, companyId },
+            select: { id: true, dealId: true },
+        });
+
+        if (!project) throw new Error('Project not found');
+
+        const uploadedDocs = [];
+        for (const file of files) {
+            const doc = await prisma.dealDocument.create({
+                data: {
+                    dealId: project.dealId,
+                    documentType,
+                    filename: file.filename,
+                    originalName: file.originalname,
+                    path: file.path.replace(/\\/g, '/'),
+                    mimetype: file.mimetype,
+                    size: file.size,
+                    uploadedBy,
+                }
+            });
+            uploadedDocs.push(doc);
+        }
+
+        return uploadedDocs;
+    }
+
+    async getProjectDocuments(projectId, companyId, documentType) {
+        const project = await prisma.project.findFirst({
+            where: { id: projectId, companyId },
+            select: { dealId: true },
+        });
+
+        if (!project) throw new Error('Project not found');
+
+        return await prisma.dealDocument.findMany({
+            where: {
+                dealId: project.dealId,
+                deal: { companyId },
+                ...(documentType && { documentType }),
+            },
+            include: {
+                uploader: { select: { id: true, fullName: true, email: true } },
+            },
+            orderBy: { createdAt: 'desc' },
+        });
     }
 
     async getAllProjects(companyId, filters = {}) {

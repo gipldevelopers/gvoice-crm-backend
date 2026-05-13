@@ -6,10 +6,12 @@ class ProjectController {
             const projectData = req.body;
             const companyId = req.user.companyId;
 
-            if (!projectData.name || !projectData.dealId) {
+            const wantsInHouse = !!projectData.inHouse;
+
+            if (!projectData.name || (!projectData.dealId && !wantsInHouse)) {
                 return res.status(400).json({
                     success: false,
-                    message: 'Missing required fields: name and dealId are required',
+                    message: 'Missing required fields: name is required, and either dealId or inHouse=true is required',
                 });
             }
 
@@ -50,6 +52,50 @@ class ProjectController {
                 success: false,
                 message: error.message || 'Error fetching projects',
             });
+        }
+    }
+
+    async uploadProjectDocuments(req, res) {
+        try {
+            const { id } = req.params; // projectId
+            const companyId = req.user.companyId;
+            const uploadedBy = req.user.id;
+            const { documentType } = req.body;
+            const files = req.files;
+
+            if (!files || files.length === 0) {
+                return res.status(400).json({ success: false, message: 'No files provided' });
+            }
+            if (!documentType) {
+                return res.status(400).json({ success: false, message: 'Document type is required' });
+            }
+
+            const result = await projectService.uploadProjectDocuments({
+                projectId: id,
+                companyId,
+                documentType,
+                files,
+                uploadedBy,
+            });
+
+            return res.status(201).json({ success: true, message: 'Documents uploaded successfully', data: result });
+        } catch (error) {
+            console.error('Error in uploadProjectDocuments:', error);
+            return res.status(500).json({ success: false, message: error.message || 'Error uploading documents' });
+        }
+    }
+
+    async getProjectDocuments(req, res) {
+        try {
+            const { id } = req.params; // projectId
+            const companyId = req.user.companyId;
+            const { documentType } = req.query;
+
+            const docs = await projectService.getProjectDocuments(id, companyId, documentType);
+            return res.status(200).json({ success: true, data: docs });
+        } catch (error) {
+            console.error('Error in getProjectDocuments:', error);
+            return res.status(500).json({ success: false, message: error.message || 'Error fetching documents' });
         }
     }
 
