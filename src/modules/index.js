@@ -10,12 +10,17 @@ const customerRoutes = require('./customers/customer.routes');
 const taskRoutes = require('./tasks/task.routes');
 const dealRoutes = require('./deals/deal.routes');
 const dashboardRoutes = require('./dashboard/dashboard.routes');
+const googleRoutes = require('./google/google.routes');
 const projectRoutes = require('./projects/project.routes');
 const companyRoutes = require('./companies/company.routes');
-const googleRoutes = require('./google/google.routes');
+const eodRoutes = require('./eod/eod.routes');
+const techTaskRoutes = require('./tech-tasks/techTask.routes');
+const salesEodRoutes = require('./sales-eod/salesEod.routes');
+const settingsRoutes = require('./settings/setting.routes');
+const departmentRoutes = require('./departments/department.routes');
 
 // Define routes
-router.use('/demo', demoRoutes);
+
 router.use('/auth', authRoutes);
 router.use('/leads', leadRoutes);
 router.use('/employees', employeeRoutes);
@@ -23,9 +28,14 @@ router.use('/customers', customerRoutes);
 router.use('/tasks', taskRoutes);
 router.use('/deals', dealRoutes);
 router.use('/dashboard', dashboardRoutes);
+router.use('/google', googleRoutes);
 router.use('/projects', projectRoutes);
 router.use('/companies', companyRoutes);
-router.use('/google', googleRoutes);
+router.use('/eod', eodRoutes);
+router.use('/tech-tasks', techTaskRoutes);
+router.use('/sales-eod', salesEodRoutes);
+router.use('/settings', settingsRoutes);
+router.use('/departments', departmentRoutes);
+
 
 module.exports = router;
-

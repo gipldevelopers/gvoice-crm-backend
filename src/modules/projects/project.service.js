@@ -1,16 +1,37 @@
 const prisma = require('../../database/prisma');
+const { addEmailJob } = require('../../helpers/mailQueue');
 
 class ProjectService {
     async createProject(projectData, companyId) {
         try {
             const tempProjectId = `PRJ-${Date.now().toString().slice(-6)}`;
+
+            let dealId = projectData.dealId;
+            const wantsInHouse = !!projectData.inHouse;
+
+            if (!dealId && wantsInHouse) {
+                const createdDeal = await prisma.deal.create({
+                    data: {
+                        title: projectData.name,
+                        value: 0,
+                        stage: 'Won',
+                        notes: projectData.notes || 'In-house project (created from Tech)',
+                        companyId: companyId,
+                        projectGenerated: true,
+                    },
+                });
+                dealId = createdDeal.id;
+            }
+
             const project = await prisma.project.create({
                 data: {
                     projectId: projectData.projectId || tempProjectId,
                     name: projectData.name,
-                    dealId: projectData.dealId,
+                    dealId,
                     companyId: companyId,
-                    status: projectData.status || 'Active'
+                    status: projectData.status || 'Active',
+                    ...(projectData.pmAssignedId ? { pmAssignedId: projectData.pmAssignedId } : {}),
+                    ...(wantsInHouse ? { department: 'tech' } : {}),
                 },
                 include: {
                     deal: {
@@ -22,16 +43,67 @@ class ProjectService {
                 }
             });
 
-            // Update deal to mark project as generated
-            await prisma.deal.update({
-                where: { id: projectData.dealId },
-                data: { projectGenerated: true }
-            });
+            // Update existing deal to mark project as generated (in-house deals are created with projectGenerated=true)
+            if (projectData.dealId) {
+                await prisma.deal.update({
+                    where: { id: projectData.dealId },
+                    data: { projectGenerated: true }
+                });
+            }
 
             return project;
         } catch (error) {
             throw new Error(`Error creating project: ${error.message}`);
         }
+    }
+
+    async uploadProjectDocuments({ projectId, companyId, documentType, files, uploadedBy }) {
+        const project = await prisma.project.findFirst({
+            where: { id: projectId, companyId },
+            select: { id: true, dealId: true },
+        });
+
+        if (!project) throw new Error('Project not found');
+
+        const uploadedDocs = [];
+        for (const file of files) {
+            const doc = await prisma.dealDocument.create({
+                data: {
+                    dealId: project.dealId,
+                    documentType,
+                    filename: file.filename,
+                    originalName: file.originalname,
+                    path: file.path.replace(/\\/g, '/'),
+                    mimetype: file.mimetype,
+                    size: file.size,
+                    uploadedBy,
+                }
+            });
+            uploadedDocs.push(doc);
+        }
+
+        return uploadedDocs;
+    }
+
+    async getProjectDocuments(projectId, companyId, documentType) {
+        const project = await prisma.project.findFirst({
+            where: { id: projectId, companyId },
+            select: { dealId: true },
+        });
+
+        if (!project) throw new Error('Project not found');
+
+        return await prisma.dealDocument.findMany({
+            where: {
+                dealId: project.dealId,
+                deal: { companyId },
+                ...(documentType && { documentType }),
+            },
+            include: {
+                uploader: { select: { id: true, fullName: true, email: true } },
+            },
+            orderBy: { createdAt: 'desc' },
+        });
     }
 
     async getAllProjects(companyId, filters = {}) {
@@ -756,6 +828,96 @@ class ProjectService {
         }
     }
 
+    async getTechDashboardStats(companyId) {
+        try {
+            // 1. Active Projects (Status = 'Active')
+            const activeProjects = await prisma.project.count({
+                where: { companyId, status: 'Active' }
+            });
+
+            // 2. Pending Activation (Won Deals that don't have projects yet)
+            const pendingActivation = await prisma.deal.count({
+                where: {
+                    companyId,
+                    stage: 'Won',
+                    projectGenerated: false
+                }
+            });
+
+            // 3. In Planning (Status = 'Planning Phase')
+            const planning = await prisma.project.count({
+                where: { companyId, status: 'Planning Phase' }
+            });
+
+            // 4. Escalated (escalatedToHead = true)
+            const escalated = await prisma.project.count({
+                where: { companyId, escalatedToHead: true }
+            });
+
+            // 5. Recent Activity
+            // We'll get latest projects, acknowledged ones, and PM assignments
+            const latestProjects = await prisma.project.findMany({
+                where: { companyId },
+                include: { pm: true },
+                orderBy: { updatedAt: 'desc' },
+                take: 5
+            });
+
+            const activities = latestProjects.map(p => {
+                let action = 'Project Updated';
+                let status = 'info';
+
+                if (!p.techLeadAcknowledge) {
+                    action = `New Project: ${p.name} pending activation`;
+                    status = 'warning';
+                } else if (p.status === 'Planning Phase' && !p.pmAssignedId) {
+                    action = `PM Assignment Pending for ${p.name}`;
+                    status = 'warning';
+                } else if (p.status === 'Planning Phase' && p.pmAssignedId) {
+                    action = `Planning Started by ${p.pm?.fullName} for ${p.name}`;
+                    status = 'success';
+                } else if (p.escalatedToHead) {
+                    action = `Escalation: ${p.name} needs attention`;
+                    status = 'danger';
+                } else if (p.status === 'Active') {
+                    action = `Project ${p.name} is now Active`;
+                    status = 'success';
+                }
+
+                const diffInMs = new Date() - new Date(p.updatedAt);
+                const diffInHours = Math.floor(diffInMs / (1000 * 60 * 60));
+                const diffInMins = Math.floor(diffInMs / (1000 * 60));
+                
+                let time = 'Just now';
+                if (diffInHours > 24) time = `${Math.floor(diffInHours / 24)} days ago`;
+                else if (diffInHours > 0) time = `${diffInHours} hours ago`;
+                else if (diffInMins > 0) time = `${diffInMins} mins ago`;
+
+                return { action, time, status };
+            });
+
+            // 6. Weekly Activity Data (Dummy for now but structured)
+            const weekDays = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
+            const weeklyStats = weekDays.map(day => ({
+                day,
+                count: Math.floor(Math.random() * 10) + 1 // Placeholder for real activity log count
+            }));
+
+            return {
+                stats: {
+                    activeProjects,
+                    pendingActivation,
+                    planning,
+                    escalated
+                },
+                recentActivities: activities,
+                weeklyStats
+            };
+        } catch (error) {
+            throw new Error(`Error fetching tech dashboard stats: ${error.message}`);
+        }
+    }
+
     async deleteProject(projectId, companyId) {
         try {
             const existingProject = await prisma.project.findFirst({
@@ -777,188 +939,225 @@ class ProjectService {
         }
     }
 
-    // ─── STAGE 8: TASK EXECUTION ENGINE ─────────────────────────────────────────
-
-    /**
-     * Get all tasks assigned to a specific user across all projects
-     */
-    async getMyTasks(userId, companyId) {
-        try {
-            const tasks = await prisma.projectTask.findMany({
-                where: {
-                    assignedToId: userId,
-                    milestone: {
-                        project: { companyId }
-                    }
-                },
-                include: {
-                    milestone: {
-                        include: {
-                            project: {
-                                select: { id: true, name: true, projectId: true, status: true }
+    async closeProject(projectId, companyId, actorUser) {
+        const project = await prisma.project.findFirst({
+            where: { id: projectId, companyId },
+            include: {
+                deal: {
+                    include: {
+                        salesperson: { select: { id: true, fullName: true, email: true } },
+                        customer: {
+                            include: {
+                                lead: {
+                                    include: {
+                                        salesperson: { select: { id: true, fullName: true, email: true } }
+                                    }
+                                }
                             }
                         }
-                    },
-                    assignedTo: { select: { id: true, fullName: true, email: true } }
-                },
-                orderBy: [
-                    { priority: 'asc' },
-                    { deadline: 'asc' }
+                    }
+                }
+            }
+        });
+
+        if (!project) throw new Error('Project not found');
+
+        const updatedProject = await prisma.project.update({
+            where: { id: projectId },
+            data: { status: 'Completed' }
+        });
+
+        const ownerEmail =
+            project.deal?.salesperson?.email ||
+            project.deal?.customer?.lead?.salesperson?.email ||
+            null;
+
+        const salesTlUsers = await prisma.user.findMany({
+            where: {
+                companyId,
+                department: { equals: 'sales', mode: 'insensitive' },
+                OR: [
+                    { role: { equals: 'team_leader', mode: 'insensitive' } },
+                    { role: { equals: 'manager', mode: 'insensitive' } }
                 ]
-            });
+            },
+            select: { email: true }
+        });
 
-            // Auto-escalate overdue acceptances
-            const now = new Date();
-            const tasksWithStatus = tasks.map(task => {
-                const isAcceptanceOverdue = task.acceptanceDueAt && !task.acceptedAt && now > new Date(task.acceptanceDueAt);
-                return {
-                    ...task,
-                    isAcceptanceOverdue,
-                    hoursUntilAcceptanceDue: task.acceptanceDueAt
-                        ? Math.max(0, (new Date(task.acceptanceDueAt) - now) / (1000 * 60 * 60))
-                        : null
-                };
-            });
+        const recipients = [
+            ownerEmail,
+            ...salesTlUsers.map((u) => u.email)
+        ].filter(Boolean);
 
-            return tasksWithStatus;
-        } catch (error) {
-            throw new Error(`Error fetching tasks: ${error.message}`);
+        if (recipients.length) {
+            const subject = `Project Completed: ${project.name}`;
+            const text = `Project "${project.name}" (${project.projectId}) has been marked as completed by ${actorUser?.id || 'Tech Team'}.`;
+            const html = `<p>Project <strong>${project.name}</strong> (${project.projectId}) has been marked as completed.</p>`;
+            try {
+                await addEmailJob({ to: recipients, subject, html, text });
+            } catch (error) {
+                console.error('[ProjectService] Failed to queue completion email:', error.message);
+            }
         }
+
+        return updatedProject;
     }
 
-    /**
-     * Get all tasks for a project (for PM/TL view)
-     */
-    async getProjectTasks(projectId, companyId) {
+    async getMyTasks(companyId, userId) {
         try {
-            const project = await prisma.project.findFirst({
-                where: { id: projectId, companyId },
+            // 1. Fetch Project Tasks
+            const projectTasks = await prisma.projectTask.findMany({
+                where: {
+                    assignedToId: userId,
+                    milestone: {
+                        project: {
+                            companyId: companyId
+                        }
+                    }
+                },
                 include: {
-                    milestones: {
+                    milestone: {
                         include: {
-                            tasks: {
-                                include: {
-                                    assignedTo: { select: { id: true, fullName: true, email: true } }
-                                },
-                                orderBy: { createdAt: 'asc' }
-                            }
-                        },
-                        orderBy: { createdAt: 'asc' }
+                            project: true
+                        }
                     }
                 }
             });
 
-            if (!project) throw new Error('Project not found');
-
-            const now = new Date();
-            // Flatten tasks and enrich with TAT info
-            const allTasks = project.milestones.flatMap(m =>
-                m.tasks.map(t => ({
-                    ...t,
-                    milestoneName: m.title,
-                    isAcceptanceOverdue: t.acceptanceDueAt && !t.acceptedAt && now > new Date(t.acceptanceDueAt),
-                    hoursUntilAcceptanceDue: t.acceptanceDueAt
-                        ? Math.max(0, (new Date(t.acceptanceDueAt) - now) / (1000 * 60 * 60))
-                        : null
-                }))
-            );
-
-            return { project, tasks: allTasks };
-        } catch (error) {
-            throw new Error(`Error fetching project tasks: ${error.message}`);
-        }
-    }
-
-    /**
-     * Accept a task assignment (resets TAT clock)
-     */
-    async acceptTask(taskId, userId, companyId) {
-        try {
-            const task = await prisma.projectTask.findFirst({
+            // 2. Fetch Tech Tasks (from EOD/Assignments)
+            const techTasks = await prisma.techTaskItem.findMany({
                 where: {
-                    id: taskId,
                     assignedToId: userId,
-                    milestone: { project: { companyId } }
-                }
-            });
-
-            if (!task) throw new Error('Task not found or not assigned to you');
-            if (task.acceptanceStatus === 'Accepted') throw new Error('Task already accepted');
-
-            const now = new Date();
-            return await prisma.projectTask.update({
-                where: { id: taskId },
-                data: {
-                    acceptanceStatus: 'Accepted',
-                    acceptedAt: now,
-                    status: 'In Progress'
+                    companyId: companyId
                 },
                 include: {
-                    assignedTo: { select: { id: true, fullName: true } },
-                    milestone: { include: { project: { select: { id: true, name: true } } } }
+                    batch: {
+                        include: {
+                            project: true
+                        }
+                    }
                 }
             });
+
+            // 3. Normalize and Combine
+            const normalizedProjectTasks = projectTasks.map(t => ({
+                id: t.id,
+                title: t.title,
+                description: t.description,
+                deadline: t.deadline,
+                status: t.status,
+                priority: t.priority,
+                type: 'Project',
+                projectName: t.milestone?.project?.name,
+                projectId: t.milestone?.project?.id,
+                milestoneName: t.milestone?.title,
+                createdAt: t.createdAt,
+                // UI Fields
+                acceptedAt: t.status !== 'Pending' ? t.updatedAt : null,
+                acceptanceStatus: t.status === 'Pending' ? 'Pending' : 'Accepted',
+                acceptanceDueAt: new Date(new Date(t.createdAt).getTime() + 8 * 60 * 60 * 1000), // 8 hours TAT
+                isAcceptanceOverdue: t.status === 'Pending' && (new Date() - new Date(t.createdAt) > 8 * 60 * 60 * 1000)
+            }));
+
+            const normalizedTechTasks = techTasks.map(t => ({
+                id: t.id,
+                title: t.title,
+                description: t.notes,
+                deadline: t.batch?.createdAt, 
+                status: t.status === 'Assigned' ? 'Pending' : t.status,
+                priority: 'Medium',
+                type: 'Technical',
+                projectName: t.batch?.project?.name || 'Internal / Other',
+                projectId: t.batch?.project?.id,
+                milestoneName: t.batch?.headTitle,
+                createdAt: t.createdAt,
+                estimatedHours: t.estimatedHours,
+                // UI Fields
+                acceptedAt: t.status !== 'Assigned' ? t.updatedAt : null,
+                acceptanceStatus: t.status === 'Assigned' ? 'Pending' : 'Accepted',
+                acceptanceDueAt: new Date(new Date(t.createdAt).getTime() + 8 * 60 * 60 * 1000), // 8 hours TAT
+                isAcceptanceOverdue: t.status === 'Assigned' && (new Date() - new Date(t.createdAt) > 8 * 60 * 60 * 1000)
+            }));
+
+            const combined = [...normalizedProjectTasks, ...normalizedTechTasks];
+            combined.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+            return combined;
         } catch (error) {
-            throw new Error(`Error accepting task: ${error.message}`);
+            throw new Error(`Error fetching my tasks: ${error.message}`);
         }
     }
 
-    /**
-     * Update task status (In Progress → Completed etc.)
-     */
-    async updateTaskStatus(taskId, userId, status, companyId) {
-        try {
-            const validStatuses = ['In Progress', 'Completed', 'On Hold'];
-            if (!validStatuses.includes(status)) throw new Error(`Invalid status. Must be one of: ${validStatuses.join(', ')}`);
-
-            const task = await prisma.projectTask.findFirst({
-                where: {
-                    id: taskId,
-                    assignedToId: userId,
-                    milestone: { project: { companyId } }
-                }
-            });
-
-            if (!task) throw new Error('Task not found or not assigned to you');
-            if (!task.acceptedAt) throw new Error('You must accept the task before updating its status');
-
-            return await prisma.projectTask.update({
+    async acceptTask(taskId, userId) {
+        // Try Project Task first
+        const pTask = await prisma.projectTask.findUnique({ where: { id: taskId } });
+        if (pTask) {
+            if (pTask.assignedToId !== userId) throw new Error('Forbidden: Not assigned to you');
+            return prisma.projectTask.update({
                 where: { id: taskId },
-                data: { status },
-                include: {
-                    assignedTo: { select: { id: true, fullName: true } },
-                    milestone: { include: { project: { select: { id: true, name: true } } } }
-                }
+                data: { status: 'Accepted' }
             });
-        } catch (error) {
-            throw new Error(`Error updating task status: ${error.message}`);
         }
+
+        // Try Tech Task
+        const tTask = await prisma.techTaskItem.findUnique({ where: { id: taskId } });
+        if (tTask) {
+            if (tTask.assignedToId !== userId) throw new Error('Forbidden: Not assigned to you');
+            return prisma.techTaskItem.update({
+                where: { id: taskId },
+                data: { status: 'In Progress' } // Tech tasks go straight to In Progress on acceptance
+            });
+        }
+
+        throw new Error('Task not found');
     }
 
-    /**
-     * Check and escalate overdue task acceptances (called periodically or on-demand)
-     */
-    async checkAndEscalateTasks(companyId) {
-        try {
-            const now = new Date();
-            const overdueResult = await prisma.projectTask.updateMany({
-                where: {
-                    acceptanceDueAt: { lt: now },
-                    acceptedAt: null,
-                    acceptanceStatus: { not: 'Escalated' },
-                    milestone: { project: { companyId } }
-                },
-                data: {
-                    acceptanceStatus: 'Escalated',
-                    escalatedAt: now,
-                    status: 'Escalated'
-                }
+    async updateTaskStatus(taskId, userId, status) {
+        // Try Project Task
+        const pTask = await prisma.projectTask.findUnique({ where: { id: taskId } });
+        if (pTask) {
+            if (pTask.assignedToId !== userId) throw new Error('Forbidden: Not assigned to you');
+            return prisma.projectTask.update({
+                where: { id: taskId },
+                data: { status }
             });
-
-            return { escalated: overdueResult.count };
-        } catch (error) {
-            throw new Error(`Error checking escalations: ${error.message}`);
         }
+
+        // Try Tech Task
+        const tTask = await prisma.techTaskItem.findUnique({ where: { id: taskId } });
+        if (tTask) {
+            if (tTask.assignedToId !== userId) throw new Error('Forbidden: Not assigned to you');
+            return prisma.techTaskItem.update({
+                where: { id: taskId },
+                data: { status }
+            });
+        }
+
+        throw new Error('Task not found');
+    }
+
+    async addTaskNote(taskId, userId, note) {
+        // Try Project Task - ProjectTask doesn't have a notes field, so we might append to description or ignore
+        // For now, let's just handle Tech Tasks which have a notes/completionNote field
+        const tTask = await prisma.techTaskItem.findUnique({ where: { id: taskId } });
+        if (tTask) {
+            if (tTask.assignedToId !== userId) throw new Error('Forbidden: Not assigned to you');
+            return prisma.techTaskItem.update({
+                where: { id: taskId },
+                data: { notes: tTask.notes ? `${tTask.notes}\n\nNote: ${note}` : note }
+            });
+        }
+
+        const pTask = await prisma.projectTask.findUnique({ where: { id: taskId } });
+        if (pTask) {
+            if (pTask.assignedToId !== userId) throw new Error('Forbidden: Not assigned to you');
+            return prisma.projectTask.update({
+                where: { id: taskId },
+                data: { description: pTask.description ? `${pTask.description}\n\nNote: ${note}` : note }
+            });
+        }
+
+        throw new Error('Task not found');
     }
 }
 

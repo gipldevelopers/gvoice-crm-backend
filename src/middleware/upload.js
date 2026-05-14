@@ -109,8 +109,38 @@ const dealDocumentUpload = multer({
   }
 });
 
+// Dynamic storage for project documents (e.g., SOW)
+const projectDocStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const projectId = req.params.id;
+    const documentType = req.body.documentType || req.query.documentType || 'Other';
+    const safeDocType = documentType.replace(/[^a-z0-9]/gi, '_').toLowerCase();
+
+    const projectDir = path.join(process.cwd(), 'uploads', 'projects', projectId, safeDocType);
+
+    if (!fs.existsSync(projectDir)) {
+      fs.mkdirSync(projectDir, { recursive: true });
+    }
+
+    cb(null, projectDir);
+  },
+  filename: (req, file, cb) => {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    const extension = path.extname(file.originalname);
+    cb(null, file.fieldname + '-' + uniqueSuffix + extension);
+  }
+});
+
+const projectDocumentUpload = multer({
+  storage: projectDocStorage,
+  limits: {
+    fileSize: (parseInt(process.env.MAX_FILE_SIZE) || 50) * 1024 * 1024,
+  }
+});
+
 module.exports = {
   upload,
   leadDocumentUpload,
-  dealDocumentUpload
+  dealDocumentUpload,
+  projectDocumentUpload
 };

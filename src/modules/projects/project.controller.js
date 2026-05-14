@@ -6,10 +6,12 @@ class ProjectController {
             const projectData = req.body;
             const companyId = req.user.companyId;
 
-            if (!projectData.name || !projectData.dealId) {
+            const wantsInHouse = !!projectData.inHouse;
+
+            if (!projectData.name || (!projectData.dealId && !wantsInHouse)) {
                 return res.status(400).json({
                     success: false,
-                    message: 'Missing required fields: name and dealId are required',
+                    message: 'Missing required fields: name is required, and either dealId or inHouse=true is required',
                 });
             }
 
@@ -50,6 +52,50 @@ class ProjectController {
                 success: false,
                 message: error.message || 'Error fetching projects',
             });
+        }
+    }
+
+    async uploadProjectDocuments(req, res) {
+        try {
+            const { id } = req.params; // projectId
+            const companyId = req.user.companyId;
+            const uploadedBy = req.user.id;
+            const { documentType } = req.body;
+            const files = req.files;
+
+            if (!files || files.length === 0) {
+                return res.status(400).json({ success: false, message: 'No files provided' });
+            }
+            if (!documentType) {
+                return res.status(400).json({ success: false, message: 'Document type is required' });
+            }
+
+            const result = await projectService.uploadProjectDocuments({
+                projectId: id,
+                companyId,
+                documentType,
+                files,
+                uploadedBy,
+            });
+
+            return res.status(201).json({ success: true, message: 'Documents uploaded successfully', data: result });
+        } catch (error) {
+            console.error('Error in uploadProjectDocuments:', error);
+            return res.status(500).json({ success: false, message: error.message || 'Error uploading documents' });
+        }
+    }
+
+    async getProjectDocuments(req, res) {
+        try {
+            const { id } = req.params; // projectId
+            const companyId = req.user.companyId;
+            const { documentType } = req.query;
+
+            const docs = await projectService.getProjectDocuments(id, companyId, documentType);
+            return res.status(200).json({ success: true, data: docs });
+        } catch (error) {
+            console.error('Error in getProjectDocuments:', error);
+            return res.status(500).json({ success: false, message: error.message || 'Error fetching documents' });
         }
     }
 
@@ -138,6 +184,15 @@ class ProjectController {
             const { id } = req.params;
             const { pmAssignedId } = req.body;
             const companyId = req.user.companyId;
+            const userRole = req.user.role;
+
+            const authorizedRoles = ['company_admin', 'head_of_department', 'team_leader'];
+            if (!authorizedRoles.includes(userRole)) {
+                return res.status(403).json({
+                    success: false,
+                    message: 'Forbidden: Only Admin or Team Leader can assign a PM',
+                });
+            }
 
             if (!pmAssignedId) {
                 return res.status(400).json({
@@ -212,69 +267,114 @@ class ProjectController {
         }
     }
 
-    // ─── STAGE 8: TASK EXECUTION ENGINE ─────────────────────────────────────────
-
-    async getMyTasks(req, res) {
+    async getTechDashboardStats(req, res) {
         try {
-            const userId = req.user.id;
             const companyId = req.user.companyId;
-            const tasks = await projectService.getMyTasks(userId, companyId);
-            return res.status(200).json({ success: true, data: tasks });
+            const stats = await projectService.getTechDashboardStats(companyId);
+            return res.status(200).json({
+                success: true,
+                message: 'Tech dashboard stats fetched successfully',
+                data: stats,
+            });
         } catch (error) {
-            console.error('Error in getMyTasks:', error);
-            return res.status(500).json({ success: false, message: error.message });
+            console.error('Error in getTechDashboardStats:', error);
+            return res.status(500).json({
+                success: false,
+                message: error.message || 'Error fetching tech dashboard stats',
+            });
         }
     }
 
-    async getProjectTasks(req, res) {
+    async closeProject(req, res) {
         try {
             const { id } = req.params;
             const companyId = req.user.companyId;
-            // Auto-check escalations on each fetch
-            await projectService.checkAndEscalateTasks(companyId);
-            const result = await projectService.getProjectTasks(id, companyId);
-            return res.status(200).json({ success: true, ...result });
+            const userRole = req.user.role;
+
+            const authorizedRoles = ['company_admin', 'head_of_department', 'team_leader'];
+            if (!authorizedRoles.includes(userRole)) {
+                return res.status(403).json({
+                    success: false,
+                    message: 'Forbidden: Tech Lead or Admin required to close project',
+                });
+            }
+
+            const result = await projectService.closeProject(id, companyId, req.user);
+            return res.status(200).json({
+                success: true,
+                message: 'Project closed successfully',
+                data: result,
+            });
         } catch (error) {
-            console.error('Error in getProjectTasks:', error);
-            return res.status(500).json({ success: false, message: error.message });
+            console.error('Error in closeProject:', error);
+            return res.status(error.message === 'Project not found' ? 404 : 500).json({
+                success: false,
+                message: error.message || 'Error closing project',
+            });
+        }
+    }
+
+    async getMyTasks(req, res) {
+        try {
+            const companyId = req.user.companyId;
+            const userId = req.user.id;
+
+            const tasks = await projectService.getMyTasks(companyId, userId);
+            return res.status(200).json({
+                success: true,
+                message: 'My tasks fetched successfully',
+                data: tasks,
+            });
+        } catch (error) {
+            console.error('Error in getMyTasks:', error);
+            return res.status(500).json({
+                success: false,
+                message: error.message || 'Error fetching tasks',
+            });
         }
     }
 
     async acceptTask(req, res) {
         try {
-            const { taskId } = req.params;
+            const { id } = req.params;
             const userId = req.user.id;
-            const companyId = req.user.companyId;
-            const task = await projectService.acceptTask(taskId, userId, companyId);
-            return res.status(200).json({ success: true, message: 'Task accepted successfully', data: task });
+            const task = await projectService.acceptTask(id, userId);
+            return res.status(200).json({ success: true, data: task });
         } catch (error) {
-            console.error('Error in acceptTask:', error);
-            return res.status(400).json({ success: false, message: error.message });
+            return res.status(error.message?.startsWith('Forbidden') ? 403 : 500).json({
+                success: false,
+                message: error.message
+            });
         }
     }
 
     async updateTaskStatus(req, res) {
         try {
-            const { taskId } = req.params;
+            const { id } = req.params;
             const { status } = req.body;
             const userId = req.user.id;
-            const companyId = req.user.companyId;
-            const task = await projectService.updateTaskStatus(taskId, userId, status, companyId);
-            return res.status(200).json({ success: true, message: 'Task status updated', data: task });
+            const task = await projectService.updateTaskStatus(id, userId, status);
+            return res.status(200).json({ success: true, data: task });
         } catch (error) {
-            console.error('Error in updateTaskStatus:', error);
-            return res.status(400).json({ success: false, message: error.message });
+            return res.status(error.message?.startsWith('Forbidden') ? 403 : 500).json({
+                success: false,
+                message: error.message
+            });
         }
     }
 
-    async checkEscalations(req, res) {
+    async addTaskNote(req, res) {
         try {
-            const companyId = req.user.companyId;
-            const result = await projectService.checkAndEscalateTasks(companyId);
-            return res.status(200).json({ success: true, ...result });
+            const { id } = req.params;
+            const { note } = req.body;
+            const userId = req.user.id;
+            const task = await projectService.addTaskNote(id, userId, note);
+            return res.status(200).json({ success: true, data: task });
         } catch (error) {
-            console.error('Error in checkEscalations:', error);
-            return res.status(500).json({ success: false, message: error.message });
+            return res.status(error.message?.startsWith('Forbidden') ? 403 : 500).json({
+                success: false,
+                message: error.message
+            });
         }
     }
 }

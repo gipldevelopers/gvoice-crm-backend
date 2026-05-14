@@ -12,6 +12,7 @@ const {
     leadQualifiedStatusDecisionTemplate,
     newLeadCreatedTemplate,
 } = require('../../helpers/leadEmailTemplates');
+const { formatInSystemTimezone } = require('../../helpers/date.helper');
 
 const LEAD_TIMER_DAYS = 15;
 const MILLISECONDS_IN_DAY = 24 * 60 * 60 * 1000;
@@ -864,13 +865,13 @@ class LeadService {
         if (role === EMPLOYEE_ROLES.HEAD_OF_DEPARTMENT) {
             if (requester.reportsToId) {
                 const admin = await prisma.user.findFirst({
-                    where: { id: requester.reportsToId, companyId, role: { in: [EMPLOYEE_ROLES.COMPANY_ADMIN, 'admin'] } },
+                    where: { id: requester.reportsToId, companyId, role: { in: [EMPLOYEE_ROLES.COMPANY_ADMIN, 'super_admin'] } },
                     select: { id: true, fullName: true, email: true }
                 });
                 if (admin) return admin;
             }
             return await prisma.user.findFirst({
-                where: { companyId, role: { in: [EMPLOYEE_ROLES.COMPANY_ADMIN, 'admin'] } },
+                where: { companyId, role: { in: [EMPLOYEE_ROLES.COMPANY_ADMIN, 'super_admin'] } },
                 select: { id: true, fullName: true, email: true }
             });
         }
@@ -950,7 +951,7 @@ class LeadService {
         return prisma.user.findFirst({
             where: {
                 companyId,
-                role: { in: [EMPLOYEE_ROLES.HEAD_OF_DEPARTMENT, EMPLOYEE_ROLES.COMPANY_ADMIN, 'admin'] },
+                role: { in: [EMPLOYEE_ROLES.HEAD_OF_DEPARTMENT, EMPLOYEE_ROLES.COMPANY_ADMIN, 'super_admin'] },
                 NOT: { id: requesterId },
             },
             select: {
@@ -1711,8 +1712,7 @@ class LeadService {
             }
 
             let nextNotes = existingLead.notes;
-            const now = new Date();
-            const formattedDate = `${now.toLocaleDateString()} ${now.toLocaleTimeString()}`;
+            const formattedDate = formatInSystemTimezone();
             const formattedNote = `[${formattedDate}] Status changed to ${status}: ${note}`;
             nextNotes = existingLead.notes ? `${existingLead.notes}\n\n${formattedNote}` : formattedNote;
 
@@ -1919,7 +1919,7 @@ class LeadService {
                 targetUser = await prisma.user.findFirst({
                     where: {
                         companyId: companyId,
-                        role: { in: ['admin', EMPLOYEE_ROLES.COMPANY_ADMIN] },
+                        role: { in: ['super_admin', EMPLOYEE_ROLES.COMPANY_ADMIN] },
                         NOT: { id: requesterId },
                     },
                     select: {
@@ -2858,7 +2858,7 @@ class LeadService {
             });
 
             if (decision === 'approve') {
-                const formattedDate = `${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString()}`;
+                const formattedDate = formatInSystemTimezone();
                 const formattedNote = `[${formattedDate}] Status changed to Qualified by approval from ${actor.fullName}: ${note}`;
                 const nextNotes = lead.notes ? `${lead.notes}\n\n${formattedNote}` : formattedNote;
 

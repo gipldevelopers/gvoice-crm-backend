@@ -1,9 +1,9 @@
 const express = require('express');
 const router = express.Router();
 const customerController = require('./customer.controller');
-const { authenticate } = require('../../middleware/auth.middleware');
+const { authenticate, requireDepartment } = require('../../middleware/auth.middleware');
 
-router.use(authenticate);
+router.use(authenticate, requireDepartment('sales'));
 
 // CRUD
 router.get('/', customerController.getAllCustomers);

@@ -2,12 +2,9 @@ const employeeService = require('./employee.service');
 
 const getEmployees = async (req, res) => {
     try {
-        // If it's a global admin (admin), they can see all companies or filter.
-        // Company admins are restricted to their own companyId.
-        let targetCompanyId = req.user.companyId;
-        if (req.user.rawRole === 'admin') {
-            targetCompanyId = req.query.companyId || 'all';
-        }
+        // Only platform admin can query across companies
+        const isGlobalAdmin = req.user.isPlatformAdmin;
+        const targetCompanyId = isGlobalAdmin ? null : req.user.companyId;
 
         const filters = {
             companyId: targetCompanyId,
@@ -21,7 +18,12 @@ const getEmployees = async (req, res) => {
         };
 
         const result = await employeeService.getAllEmployees(filters);
-        res.status(200).json({ success: true, ...result });
+        res.status(200).json({ 
+            success: true, 
+            data: result.users,
+            users: result.users,
+            pagination: result.pagination 
+        });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
@@ -30,7 +32,8 @@ const getEmployees = async (req, res) => {
 const getEmployee = async (req, res) => {
     try {
         const { id } = req.params;
-        const companyId = req.user.rawRole === 'admin' ? null : req.user.companyId;
+        const isGlobalAdmin = req.user.isPlatformAdmin;
+        const companyId = isGlobalAdmin ? null : req.user.companyId;
         const employee = await employeeService.getEmployeeById(id, companyId);
 
         if (!employee) {
@@ -45,11 +48,9 @@ const getEmployee = async (req, res) => {
 
 const createEmployee = async (req, res) => {
     try {
-        // Determine target company: prioritise body for super-admins, fallback to current user's company
-        let targetCompanyId = req.body.companyId;
-        if (!targetCompanyId || req.user.rawRole !== 'admin') {
-            targetCompanyId = req.user.companyId;
-        }
+        const isGlobalAdmin = req.user.isPlatformAdmin;
+        // For global admin, use companyId from body. For others, use their own companyId.
+        const targetCompanyId = isGlobalAdmin ? req.body.companyId : req.user.companyId;
 
         if (!targetCompanyId) {
             return res.status(400).json({ success: false, message: 'companyId is required' });
@@ -67,7 +68,8 @@ const createEmployee = async (req, res) => {
 const updateEmployee = async (req, res) => {
     try {
         const { id } = req.params;
-        const companyId = req.user.rawRole === 'admin' ? null : req.user.companyId;
+        const isGlobalAdmin = req.user.isPlatformAdmin;
+        const companyId = isGlobalAdmin ? null : req.user.companyId;
 
         const result = await employeeService.updateEmployee(id, req.body, companyId);
 
@@ -86,16 +88,23 @@ const patchEmployeeStatus = async (req, res) => {
         const { id } = req.params;
         const { status } = req.body;
 
+        // Prevent users from deactivating their own account
+        if (id === req.user.id && (status === 'inactive' || status === 'suspended')) {
+            return res.status(403).json({
+                success: false,
+                message: "Security Restriction: You cannot suspend your own active administrator account."
+            });
+        }
+
         if (!status || !['active', 'inactive', 'suspended'].includes(status)) {
             return res.status(400).json({ success: false, message: 'Invalid status value.' });
         }
 
         const prisma = require('../../database/prisma');
         const where = { id };
-        if (req.user.rawRole !== 'admin') {
+        if (!req.user.isPlatformAdmin) {
             where.companyId = req.user.companyId;
         }
-
         const updated = await prisma.user.updateMany({
             where,
             data: { status }
@@ -114,7 +123,17 @@ const patchEmployeeStatus = async (req, res) => {
 const deleteEmployee = async (req, res) => {
     try {
         const { id } = req.params;
-        const companyId = req.user.rawRole === 'admin' ? null : req.user.companyId;
+
+        // Prevent users from deleting their own account
+        if (id === req.user.id) {
+            return res.status(403).json({
+                success: false,
+                message: "Security Restriction: You cannot delete your own active administrator account."
+            });
+        }
+
+        const isGlobalAdmin = req.user.isPlatformAdmin;
+        const companyId = isGlobalAdmin ? null : req.user.companyId;
 
         const result = await employeeService.deleteEmployee(id, companyId);
 
@@ -130,7 +149,8 @@ const deleteEmployee = async (req, res) => {
 
 const getDepartments = async (req, res) => {
     try {
-        const companyId = req.user.rawRole === 'admin'
+        const isGlobalAdmin = req.user.isPlatformAdmin;
+        const companyId = isGlobalAdmin
             ? (req.query.companyId || req.user.companyId)
             : req.user.companyId;
 
@@ -143,7 +163,8 @@ const getDepartments = async (req, res) => {
 
 const getHierarchy = async (req, res) => {
     try {
-        const companyId = req.user.rawRole === 'admin'
+        const isGlobalAdmin = req.user.isPlatformAdmin;
+        const companyId = isGlobalAdmin
             ? (req.query.companyId || req.user.companyId)
             : req.user.companyId;
 
@@ -156,7 +177,8 @@ const getHierarchy = async (req, res) => {
 
 const getPotentialManagers = async (req, res) => {
     try {
-        const companyId = req.user.rawRole === 'admin'
+        const isGlobalAdmin = req.user.isPlatformAdmin;
+        const companyId = isGlobalAdmin
             ? (req.query.companyId || req.user.companyId)
             : req.user.companyId;
         const { role, department, excludeId } = req.query;
