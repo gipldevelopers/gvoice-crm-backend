@@ -4,9 +4,10 @@ const getEmployees = async (req, res) => {
     try {
         // Only platform admin can query across companies
         const isGlobalAdmin = req.user.isPlatformAdmin;
+        const targetCompanyId = isGlobalAdmin ? null : req.user.companyId;
 
         const filters = {
-            companyId: isGlobalAdmin ? (req.query.companyId || 'all') : req.user.companyId,
+            companyId: targetCompanyId,
             department: req.query.department,
             role: req.query.role,
             status: req.query.status,
@@ -52,7 +53,7 @@ const createEmployee = async (req, res) => {
         const targetCompanyId = isGlobalAdmin ? req.body.companyId : req.user.companyId;
 
         if (!targetCompanyId) {
-            throw new Error('companyId is required');
+            return res.status(400).json({ success: false, message: 'companyId is required' });
         }
 
         const employeeData = { ...req.body, companyId: targetCompanyId };

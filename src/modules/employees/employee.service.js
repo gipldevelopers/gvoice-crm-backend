@@ -246,7 +246,7 @@ const getAllEmployees = async (filters = {}) => {
     ]);
 
     return {
-        users: employees.map(mapEmployee),
+        data: employees.map(mapEmployee),
         pagination: {
             total,
             page: Number(page),

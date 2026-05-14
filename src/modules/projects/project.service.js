@@ -5,13 +5,33 @@ class ProjectService {
     async createProject(projectData, companyId) {
         try {
             const tempProjectId = `PRJ-${Date.now().toString().slice(-6)}`;
+
+            let dealId = projectData.dealId;
+            const wantsInHouse = !!projectData.inHouse;
+
+            if (!dealId && wantsInHouse) {
+                const createdDeal = await prisma.deal.create({
+                    data: {
+                        title: projectData.name,
+                        value: 0,
+                        stage: 'Won',
+                        notes: projectData.notes || 'In-house project (created from Tech)',
+                        companyId: companyId,
+                        projectGenerated: true,
+                    },
+                });
+                dealId = createdDeal.id;
+            }
+
             const project = await prisma.project.create({
                 data: {
                     projectId: projectData.projectId || tempProjectId,
                     name: projectData.name,
-                    dealId: projectData.dealId,
+                    dealId,
                     companyId: companyId,
-                    status: projectData.status || 'Active'
+                    status: projectData.status || 'Active',
+                    ...(projectData.pmAssignedId ? { pmAssignedId: projectData.pmAssignedId } : {}),
+                    ...(wantsInHouse ? { department: 'tech' } : {}),
                 },
                 include: {
                     deal: {
@@ -22,10 +42,68 @@ class ProjectService {
                     }
                 }
             });
+
+            // Update existing deal to mark project as generated (in-house deals are created with projectGenerated=true)
+            if (projectData.dealId) {
+                await prisma.deal.update({
+                    where: { id: projectData.dealId },
+                    data: { projectGenerated: true }
+                });
+            }
+
             return project;
         } catch (error) {
             throw new Error(`Error creating project: ${error.message}`);
         }
+    }
+
+    async uploadProjectDocuments({ projectId, companyId, documentType, files, uploadedBy }) {
+        const project = await prisma.project.findFirst({
+            where: { id: projectId, companyId },
+            select: { id: true, dealId: true },
+        });
+
+        if (!project) throw new Error('Project not found');
+
+        const uploadedDocs = [];
+        for (const file of files) {
+            const doc = await prisma.dealDocument.create({
+                data: {
+                    dealId: project.dealId,
+                    documentType,
+                    filename: file.filename,
+                    originalName: file.originalname,
+                    path: file.path.replace(/\\/g, '/'),
+                    mimetype: file.mimetype,
+                    size: file.size,
+                    uploadedBy,
+                }
+            });
+            uploadedDocs.push(doc);
+        }
+
+        return uploadedDocs;
+    }
+
+    async getProjectDocuments(projectId, companyId, documentType) {
+        const project = await prisma.project.findFirst({
+            where: { id: projectId, companyId },
+            select: { dealId: true },
+        });
+
+        if (!project) throw new Error('Project not found');
+
+        return await prisma.dealDocument.findMany({
+            where: {
+                dealId: project.dealId,
+                deal: { companyId },
+                ...(documentType && { documentType }),
+            },
+            include: {
+                uploader: { select: { id: true, fullName: true, email: true } },
+            },
+            orderBy: { createdAt: 'desc' },
+        });
     }
 
     async getAllProjects(companyId, filters = {}) {
@@ -35,7 +113,7 @@ class ProjectService {
             // 1. Fetch Existing Projects
             const projectWhere = {
                 companyId: companyId,
-                ...(status && status !== 'Pending Activation' && { status }),
+                ...(status && status !== 'Planning Phase' && { status }),
                 ...(search && {
                     OR: [
                         { name: { contains: search, mode: 'insensitive' } },
@@ -49,6 +127,9 @@ class ProjectService {
             const projects = await prisma.project.findMany({
                 where: projectWhere,
                 include: {
+                    milestones: {
+                        include: { tasks: { select: { status: true } } }
+                    },
                     deal: {
                         include: {
                             customer: {
@@ -79,7 +160,7 @@ class ProjectService {
 
             // 2. Fetch 'Won' deals that don't have projects yet
             let pendingDeals = [];
-            if (!status || status === 'Pending Activation' || status === 'All') {
+            if (!status || status === 'Planning Phase' || status === 'All') {
                 const dealWhere = {
                     companyId: companyId,
                     stage: 'Won',
@@ -113,11 +194,16 @@ class ProjectService {
                     },
                     orderBy: { updatedAt: 'desc' },
                 });
+
+                // Extra safety: Filter out any deals that already have a project in the DB
+                // but for some reason projectGenerated is still false
+                const realProjectDealIds = new Set(projects.map(p => p.dealId));
+                pendingDeals = pendingDeals.filter(d => !realProjectDealIds.has(d.id));
             }
 
             // 3. Fetch 'Won' leads that don't have deals yet
             let wonLeads = [];
-            if (!status || status === 'Pending Activation' || status === 'All') {
+            if (!status || status === 'Planning Phase' || status === 'All') {
                 wonLeads = await prisma.lead.findMany({
                     where: {
                         companyId: companyId,
@@ -158,36 +244,44 @@ class ProjectService {
                 });
             }
 
-            // 4. Normalize and Combine
-            const normalizedProjects = projects.map(p => ({
-                id: p.id,
-                projectId: p.projectId,
-                name: p.name,
-                status: p.status,
-                techLeadAcknowledge: p.techLeadAcknowledge,
-                acknowledgedAt: p.acknowledgedAt,
-                escalatedToHead: p.escalatedToHead,
-                pmAssignedId: p.pmAssignedId,
-                pm: p.pm,
-                createdAt: p.createdAt,
-                updatedAt: p.updatedAt,
-                deal: {
-                    ...p.deal,
-                    currency: (p.deal?.customer?.lead?.currency || 'USD').toUpperCase()
-                }
-            }));
+            // 4. Normalize
+            const normalizedProjects = projects.map(p => {
+                const allTasks = p.milestones?.flatMap(m => m.tasks) || [];
+                const totalTasks = allTasks.length;
+                const completedTasks = allTasks.filter(t => t.status === 'Completed').length;
+
+                return {
+                    id: p.id,
+                    projectId: p.projectId,
+                    name: p.name,
+                    status: p.status === 'Pending Activation' ? 'Planning Phase' : p.status,
+                    techLeadAcknowledge: p.techLeadAcknowledge,
+                    acknowledgedAt: p.acknowledgedAt,
+                    escalatedToHead: p.escalatedToHead,
+                    pmAssignedId: p.pmAssignedId,
+                    pm: p.pm,
+                    totalTasks,
+                    completedTasks,
+                    createdAt: p.createdAt,
+                    updatedAt: p.updatedAt,
+                    deal: {
+                        ...p.deal,
+                        currency: (p.deal?.customer?.lead?.currency || '').toUpperCase()
+                    }
+                };
+            });
 
             const normalizedPendingDeals = pendingDeals.map(d => ({
                 id: `deal-${d.id}`,
                 projectId: 'PENDING',
                 name: `Project: ${d.title}`,
-                status: 'Pending Activation',
+                status: 'Planning Phase',
                 updatedAt: d.updatedAt,
                 deal: {
                     id: d.id,
                     title: d.title,
                     value: d.value,
-                    currency: (d.customer?.lead?.currency || 'USD').toUpperCase(),
+                    currency: (d.customer?.lead?.currency || '').toUpperCase(),
                     customer: d.customer,
                     salesperson: d.salesperson,
                     // Additional lead-like info if available from the deal's origin
@@ -202,13 +296,13 @@ class ProjectService {
                 id: `lead-${l.id}`,
                 projectId: 'PENDING',
                 name: `Project: ${l.name}`,
-                status: 'Pending Activation',
+                status: 'Planning Phase',
                 updatedAt: l.updatedAt,
                 deal: {
                     id: null,
                     title: l.name,
                     value: l.value || 0,
-                    currency: (l.currency || 'USD').toUpperCase(),
+                    currency: (l.currency || '').toUpperCase(),
                     customer: l.customer || { id: null, name: l.name },
                     salesperson: l.salesperson,
                     email: l.email || 'N/A',
@@ -218,7 +312,30 @@ class ProjectService {
                 }
             }));
 
-            let combined = [...normalizedProjects, ...normalizedPendingDeals, ...normalizedWonLeads];
+            // 5. Intelligent Deduplication
+            // Filter wonLeads: exclude if we already have a Deal or Project for this lead/customer
+            const existingCustomerIds = new Set([
+                ...normalizedProjects.map(p => p.deal?.customerId).filter(Boolean),
+                ...normalizedPendingDeals.map(d => d.deal?.customer?.id).filter(Boolean)
+            ]);
+
+            const existingNames = new Set([
+                ...normalizedProjects.map(p => p.name.replace('Project: ', '').toLowerCase()),
+                ...normalizedPendingDeals.map(d => d.name.replace('Project: ', '').toLowerCase())
+            ]);
+
+            const dedupedWonLeads = normalizedWonLeads.filter(l => {
+                // Remove if customer already has a deal/project
+                if (l.deal.customer?.id && existingCustomerIds.has(l.deal.customer.id)) return false;
+
+                // Remove if the project name (usually from lead name) is already present
+                const leadName = l.name.replace('Project: ', '').toLowerCase();
+                if (existingNames.has(leadName)) return false;
+
+                return true;
+            });
+
+            let combined = [...normalizedProjects, ...normalizedPendingDeals, ...dedupedWonLeads];
 
             // Sort by updatedAt desc
             combined.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
@@ -268,12 +385,22 @@ class ProjectService {
 
                 if (!lead) throw new Error('Lead not found');
 
+                // Check if a real project already exists for this lead (via customer/deal)
+                const existingProject = await prisma.project.findFirst({
+                    where: { deal: { customer: { leadId: leadId } } },
+                    include: { deal: true }
+                });
+
+                if (existingProject) {
+                    return this.getProjectById(existingProject.id, companyId);
+                }
+
                 // Return normalized virtual project
                 return {
                     id: `lead-${lead.id}`,
                     projectId: 'PENDING',
                     name: `Project: ${lead.name}`,
-                    status: 'Pending Activation',
+                    status: 'Planning Phase',
                     updatedAt: lead.updatedAt,
                     createdAt: lead.createdAt,
                     techLeadAcknowledge: false,
@@ -281,7 +408,7 @@ class ProjectService {
                         id: null,
                         title: lead.name,
                         value: lead.value || 0,
-                        currency: (lead.currency || 'USD').toUpperCase(),
+                        currency: (lead.currency || '').toUpperCase(),
                         customer: lead.customer || { id: null, name: lead.name, lead: { documents: (lead.documents || []).map(normalizePath) } },
                         salesperson: lead.salesperson,
                         email: lead.email || 'N/A',
@@ -305,24 +432,29 @@ class ProjectService {
                             }
                         },
                         salesperson: { select: { id: true, fullName: true, email: true } },
-                        documents: true
+                        documents: true,
+                        project: { select: { id: true } }
                     }
                 });
 
                 if (!deal) throw new Error('Deal not found');
+
+                if (deal.project) {
+                    return this.getProjectById(deal.project.id, companyId);
+                }
 
                 // Return normalized virtual project
                 return {
                     id: `deal-${deal.id}`,
                     projectId: 'PENDING',
                     name: `Project: ${deal.title}`,
-                    status: 'Pending Activation',
+                    status: 'Planning Phase',
                     updatedAt: deal.updatedAt,
                     createdAt: deal.createdAt,
                     techLeadAcknowledge: false,
                     deal: {
                         ...deal,
-                        currency: (deal.customer?.lead?.currency || 'USD').toUpperCase(),
+                        currency: (deal.customer?.lead?.currency || '').toUpperCase(),
                         customer: {
                             ...deal.customer,
                             lead: {
@@ -391,7 +523,23 @@ class ProjectService {
                 project.deal.documents = project.deal.documents.map(normalizePath);
             }
 
-            return project;
+            if (project.deal?.customer?.lead) {
+                project.deal.currency = (project.deal.customer.lead.currency || '').toUpperCase();
+            }
+
+            // Calculate Planning TAT (48 Hours)
+            if (project.planningStartTime && !project.planLocked) {
+                const planningStart = new Date(project.planningStartTime);
+                const now = new Date();
+                const hoursPlanning = (now - planningStart) / (1000 * 60 * 60);
+                project.planningEscalated = hoursPlanning > 48;
+                project.planningHoursRemaining = Math.max(0, 48 - hoursPlanning);
+            }
+
+            return {
+                ...project,
+                status: project.status === 'Pending Activation' ? 'Planning Phase' : project.status
+            };
         } catch (error) {
             throw new Error(`Error fetching project: ${error.message}`);
         }
@@ -475,6 +623,11 @@ class ProjectService {
 
                 if (existingReal) {
                     realProjectId = existingReal.id;
+                    // Fix in-case flag was desynced
+                    await prisma.deal.update({
+                        where: { id: actualDealId },
+                        data: { projectGenerated: true }
+                    });
                 } else {
                     const tempId = `PRJ-${Date.now().toString().slice(-6)}`;
                     const newProj = await prisma.project.create({
@@ -487,6 +640,12 @@ class ProjectService {
                         }
                     });
                     realProjectId = newProj.id;
+
+                    // Mark deal as project generated
+                    await prisma.deal.update({
+                        where: { id: actualDealId },
+                        data: { projectGenerated: true }
+                    });
                 }
             }
 
@@ -541,7 +700,7 @@ class ProjectService {
                 realProjectId = acknowledged.id;
             }
 
-            const existingProject = await prisma.project.findUnique({
+            const existingProject = await prisma.project.findFirst({
                 where: {
                     id: realProjectId,
                     companyId: companyId,
@@ -582,40 +741,59 @@ class ProjectService {
 
     async saveProjectPlan(projectId, planData, companyId) {
         try {
+            let realProjectId = projectId;
+
+            // Handle Virtual IDs
+            if (projectId.startsWith('lead-') || projectId.startsWith('deal-')) {
+                const acknowledged = await this.acknowledgeProject(projectId, companyId);
+                realProjectId = acknowledged.id;
+            }
+
             const { milestones } = planData;
 
             // Use a transaction to update milestones and tasks
             await prisma.$transaction(async (tx) => {
                 // 1. Delete existing milestones and tasks for this project (re-sync approach)
                 await tx.projectMilestone.deleteMany({
-                    where: { projectId: projectId }
+                    where: { projectId: realProjectId }
                 });
 
                 // 2. Create new milestones and tasks
                 for (const m of milestones) {
                     await tx.projectMilestone.create({
                         data: {
-                            projectId: projectId,
+                            projectId: realProjectId,
                             title: m.title,
                             description: m.description,
-                            deadline: new Date(m.deadline),
+                            deadline: m.deadline ? new Date(m.deadline) : null,
                             status: m.status || 'Pending',
                             tasks: {
-                                create: (m.tasks || []).map(t => ({
-                                    title: t.title,
-                                    description: t.description,
-                                    deadline: new Date(t.deadline),
-                                    status: t.status || 'Pending',
-                                    priority: t.priority || 'Medium',
-                                    assignedToId: t.assignedToId
-                                }))
+                                create: (m.tasks || []).map(t => {
+                                    const hasAssignee = !!t.assignedToId;
+                                    const assignedAt = hasAssignee ? new Date() : null;
+                                    const acceptanceDueAt = hasAssignee
+                                        ? new Date(assignedAt.getTime() + 8 * 60 * 60 * 1000) // +8 hours
+                                        : null;
+                                    return {
+                                        title: t.title,
+                                        description: t.description,
+                                        deliverable: t.deliverable || null,
+                                        estimatedHours: t.estimatedHours ? parseFloat(t.estimatedHours) : null,
+                                        deadline: t.deadline ? new Date(t.deadline) : null,
+                                        status: t.status || 'Pending',
+                                        priority: t.priority || 'Medium',
+                                        assignedToId: t.assignedToId || null,
+                                        assignedAt,
+                                        acceptanceDueAt
+                                    };
+                                })
                             }
                         }
                     });
                 }
             });
 
-            return this.getProjectById(projectId, companyId);
+            return this.getProjectById(realProjectId, companyId);
         } catch (error) {
             throw new Error(`Error saving project plan: ${error.message}`);
         }
@@ -623,11 +801,19 @@ class ProjectService {
 
     async lockProjectPlan(projectId, companyId) {
         try {
+            let realProjectId = projectId;
+
+            // Handle Virtual IDs
+            if (projectId.startsWith('lead-') || projectId.startsWith('deal-')) {
+                const acknowledged = await this.acknowledgeProject(projectId, companyId);
+                realProjectId = acknowledged.id;
+            }
+
             const updatedProject = await prisma.project.update({
-                where: { id: projectId },
+                where: { id: realProjectId },
                 data: {
                     planLocked: true,
-                    status: 'Active' // Transition to Active phase once plan is locked
+                    status: 'In Progress' // Plan locked → team actively executing
                 },
                 include: {
                     milestones: {

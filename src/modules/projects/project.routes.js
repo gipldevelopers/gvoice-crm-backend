@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const projectController = require('./project.controller');
 const { authenticate, requireDepartment } = require('../../middleware/auth.middleware');
+const { projectDocumentUpload } = require('../../middleware/upload');
 
 router.use(authenticate, requireDepartment('tech'));
 
@@ -9,6 +10,8 @@ router.post('/', projectController.createProject);
 router.get('/', projectController.getAllProjects);
 router.get('/my-tasks', projectController.getMyTasks);
 router.get('/stats', projectController.getTechDashboardStats);
+router.post('/:id/documents', projectDocumentUpload.array('files'), projectController.uploadProjectDocuments);
+router.get('/:id/documents', projectController.getProjectDocuments);
 router.get('/:id', projectController.getProjectById);
 router.put('/:id', projectController.updateProject);
 router.delete('/:id', projectController.deleteProject);
