@@ -18,6 +18,7 @@ const techTaskRoutes = require('./tech-tasks/techTask.routes');
 const salesEodRoutes = require('./sales-eod/salesEod.routes');
 const settingsRoutes = require('./settings/setting.routes');
 const departmentRoutes = require('./departments/department.routes');
+const roleRoutes = require('./roles/role.routes');
 
 // Define routes
 
@@ -36,6 +37,7 @@ router.use('/tech-tasks', techTaskRoutes);
 router.use('/sales-eod', salesEodRoutes);
 router.use('/settings', settingsRoutes);
 router.use('/departments', departmentRoutes);
+router.use('/roles', roleRoutes);
 
 
 module.exports = router;

@@ -20,8 +20,7 @@ const getEmployees = async (req, res) => {
         const result = await employeeService.getAllEmployees(filters);
         res.status(200).json({ 
             success: true, 
-            data: result.users,
-            users: result.users,
+            data: result.data,
             pagination: result.pagination 
         });
     } catch (error) {

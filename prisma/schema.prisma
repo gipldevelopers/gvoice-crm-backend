@@ -26,6 +26,7 @@ model Company {
   techTaskItems TechTaskItem[]
   salesEodEntries SalesEodEntry[]
   departments Department[]
+  roles       Role[]
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -42,6 +43,19 @@ model Department {
 
   @@unique([companyId, name])
   @@map("departments")
+}
+
+model Role {
+  id        String   @id @default(uuid())
+  name      String
+  baseRole  String   @default("employee") // company_admin, head_of_department, team_leader, employee
+  companyId String
+  company   Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([companyId, name])
+  @@map("roles")
 }
 
 model User {

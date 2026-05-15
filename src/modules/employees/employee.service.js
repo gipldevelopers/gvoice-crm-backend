@@ -45,7 +45,7 @@ const ROLE_FILTER_ALIASES = {
     [EMPLOYEE_ROLES.COMPANY_ADMIN]: ['company_admin', 'admin'],
     [EMPLOYEE_ROLES.HEAD_OF_DEPARTMENT]: ['head_of_department'],
     [EMPLOYEE_ROLES.TEAM_LEADER]: ['team_leader', 'manager'],
-    [EMPLOYEE_ROLES.EMPLOYEE]: ['employee', 'user', 'staff']
+    [EMPLOYEE_ROLES.EMPLOYEE]: ['employee', 'user', 'staff', 'senior_developer', 'qa_engineer', 'devops_engineer']
 };
 
 const resolveTeamNameForUser = ({ role, inputTeamName, reportingManager }) => {
@@ -66,6 +66,19 @@ const resolveTeamNameForUser = ({ role, inputTeamName, reportingManager }) => {
     return null;
 };
 
+const getNormalizedRole = async (companyId, roleName) => {
+    if (!roleName) return EMPLOYEE_ROLES.EMPLOYEE;
+    // 1. Try to find custom role in DB
+    if (companyId) {
+        const customRole = await prisma.role.findFirst({
+            where: { companyId, name: { equals: roleName, mode: 'insensitive' } }
+        });
+        if (customRole) return customRole.baseRole;
+    }
+    // 2. Fallback to hardcoded mapping
+    return normalizeRole(roleName);
+};
+
 const getRoleFilterValues = (inputRole) => {
     const normalized = normalizeRole(inputRole);
     return ROLE_FILTER_ALIASES[normalized] || [normalized];
@@ -75,13 +88,16 @@ const mapEmployee = (employee) => {
     const normalizedRole = normalizeRole(employee.role);
     return {
         ...employee,
-        role: normalizedRole,
-        roleLabel: ROLE_LABELS[normalizedRole] || normalizedRole,
+        baseRole: normalizedRole,
+        roleLabel: ROLE_LABELS[normalizedRole] || employee.role || normalizedRole,
         reportsTo: employee.reportsTo
             ? {
                 ...employee.reportsTo,
-                role: normalizeRole(employee.reportsTo.role),
-                roleLabel: ROLE_LABELS[normalizeRole(employee.reportsTo.role)] || normalizeRole(employee.reportsTo.role)
+                baseRole: normalizeRole(employee.reportsTo.role),
+                roleLabel:
+                    ROLE_LABELS[normalizeRole(employee.reportsTo.role)] ||
+                    employee.reportsTo.role ||
+                    normalizeRole(employee.reportsTo.role)
             }
             : null
     };
@@ -108,18 +124,21 @@ const ensureSingleDepartmentHead = async ({ companyId, department, excludeUserId
 const validateReportingStructure = async ({
     companyId,
     role,
+    roleName,
     department,
     reportsToId,
     employeeId = null
 }) => {
     const normalizedRole = normalizeRole(role);
+    const isProjectManager = normalizeRole(roleName || role) === 'project_manager';
 
     if (normalizedRole !== EMPLOYEE_ROLES.COMPANY_ADMIN && (!department || !department.trim())) {
         throw new Error('Department is required for this role');
     }
 
     if (!reportsToId) {
-        if (normalizedRole === EMPLOYEE_ROLES.EMPLOYEE) {
+        // Project Manager and Company Admin don't strictly require a manager
+        if (normalizedRole === EMPLOYEE_ROLES.EMPLOYEE && !isProjectManager) {
             throw new Error('Employee must be assigned under a Team Leader');
         }
         return null;
@@ -142,12 +161,15 @@ const validateReportingStructure = async ({
 
     // Enforce department matching for all roles except Company Admin managers
     if (managerRole !== EMPLOYEE_ROLES.COMPANY_ADMIN) {
+        if (!department || !department.trim()) {
+            throw new Error('Department is required for this role');
+        }
         if (manager.department?.toLowerCase() !== department.toLowerCase()) {
             throw new Error(`Reporting manager must be in the same department ("${department}"). Selected manager is in "${manager.department}".`);
         }
     }
 
-    if (normalizedRole === EMPLOYEE_ROLES.COMPANY_ADMIN) {
+    if (normalizedRole === EMPLOYEE_ROLES.COMPANY_ADMIN && !isProjectManager) {
         throw new Error('Company Admin cannot have a reporting manager');
     }
 
@@ -160,13 +182,20 @@ const validateReportingStructure = async ({
     }
 
     if (normalizedRole === EMPLOYEE_ROLES.TEAM_LEADER) {
-        if (![EMPLOYEE_ROLES.COMPANY_ADMIN, EMPLOYEE_ROLES.HEAD_OF_DEPARTMENT].includes(managerRole)) {
-            throw new Error('Team Leader can report only to Company Admin or Head of Department');
+        if (![EMPLOYEE_ROLES.COMPANY_ADMIN, EMPLOYEE_ROLES.HEAD_OF_DEPARTMENT].includes(managerRole) && managerRole !== 'project_manager') {
+            throw new Error('Team Leader can report only to Company Admin, Head of Department, or Project Manager');
         }
         return manager;
     }
 
-    if (normalizedRole === EMPLOYEE_ROLES.EMPLOYEE) {
+    if (
+        [
+            EMPLOYEE_ROLES.EMPLOYEE,
+            EMPLOYEE_ROLES.SENIOR_DEVELOPER,
+            EMPLOYEE_ROLES.QA_ENGINEER,
+            EMPLOYEE_ROLES.DEVOPS_ENGINEER
+        ].includes(normalizedRole)
+    ) {
         if (
             ![
                 EMPLOYEE_ROLES.TEAM_LEADER,
@@ -174,7 +203,7 @@ const validateReportingStructure = async ({
                 EMPLOYEE_ROLES.COMPANY_ADMIN
             ].includes(managerRole)
         ) {
-            throw new Error('Employee can report only to Team Leader, Head of Department, or Company Admin');
+            throw new Error(`${ROLE_LABELS[normalizedRole] || 'Employee'} can report only to Team Leader, Head of Department, or Company Admin`);
         }
         return manager;
     }
@@ -284,7 +313,7 @@ const createEmployee = async (data) => {
         status
     } = data;
 
-    const normalizedRole = normalizeRole(role);
+    const normalizedRole = await getNormalizedRole(companyId, role);
 
     if (normalizedRole === EMPLOYEE_ROLES.HEAD_OF_DEPARTMENT) {
         await ensureSingleDepartmentHead({
@@ -306,6 +335,7 @@ const createEmployee = async (data) => {
     const reportingManager = await validateReportingStructure({
         companyId,
         role: normalizedRole,
+        roleName: role,
         department,
         reportsToId
     });
@@ -329,7 +359,7 @@ const createEmployee = async (data) => {
                 inputTeamName: teamName,
                 reportingManager
             }),
-            role: normalizedRole,
+            role: role, // Store original role name
             reportsToId: reportsToId || null,
             companyId,
             status: status || 'active'
@@ -349,10 +379,13 @@ const createEmployee = async (data) => {
             roleLabel: mappedEmployee.roleLabel
         });
 
-        await addEmailJob({
+        // We don't await this to prevent blocking the response if Redis/BullMQ is slow
+        addEmailJob({
             to: employee.email,
             subject: emailTemplate.subject,
             html: emailTemplate.html
+        }).catch(err => {
+            console.error(`[createEmployee] Async email queue failure for ${employee.email}:`, err.message);
         });
     } catch (emailError) {
         console.error(`[createEmployee] Failed to queue welcome email for ${employee.email}:`, emailError.message);
@@ -391,7 +424,7 @@ const updateEmployee = async (id, data, companyId) => {
     }
 
     const targetCompanyId = existing.companyId;
-    const normalizedRole = normalizeRole(role || existing.role);
+    const normalizedRole = await getNormalizedRole(targetCompanyId, role || existing.role);
     const normalizedDepartment = department || null;
     const normalizedManagerId = reportsToId === '' ? null : reportsToId;
 
@@ -406,6 +439,7 @@ const updateEmployee = async (id, data, companyId) => {
     const reportingManager = await validateReportingStructure({
         companyId: targetCompanyId,
         role: normalizedRole,
+        roleName: role || existing.role,
         department: normalizedDepartment,
         reportsToId: normalizedManagerId,
         employeeId: id
@@ -448,7 +482,7 @@ const updateEmployee = async (id, data, companyId) => {
         phone: phone ?? null,
         department: normalizedDepartment,
         teamName: resolvedTeamName,
-        role: normalizedRole,
+        role: role || undefined, // Store original role if provided
         reportsToId: normalizedManagerId || null,
         status: status || undefined
     };
@@ -591,9 +625,11 @@ const getPotentialManagers = async (companyId, filters = {}) => {
         department = null;
     }
 
-    const normalizedRole = normalizeRole(role);
+    const normalizedRole = await getNormalizedRole(companyId, role);
 
-    if (normalizedRole === EMPLOYEE_ROLES.COMPANY_ADMIN) {
+    const isProjectManager = normalizeRole(role) === 'project_manager';
+
+    if (normalizedRole === EMPLOYEE_ROLES.COMPANY_ADMIN && !isProjectManager) {
         return [];
     }
 
@@ -614,8 +650,11 @@ const getPotentialManagers = async (companyId, filters = {}) => {
     } else {
         // For other roles, determine additional allowed manager roles
         const managerRolesByTargetRole = {
-            [EMPLOYEE_ROLES.TEAM_LEADER]: [EMPLOYEE_ROLES.HEAD_OF_DEPARTMENT],
-            [EMPLOYEE_ROLES.EMPLOYEE]: [EMPLOYEE_ROLES.TEAM_LEADER, EMPLOYEE_ROLES.HEAD_OF_DEPARTMENT]
+            [EMPLOYEE_ROLES.TEAM_LEADER]: [EMPLOYEE_ROLES.HEAD_OF_DEPARTMENT, 'project_manager'],
+            [EMPLOYEE_ROLES.EMPLOYEE]: [EMPLOYEE_ROLES.TEAM_LEADER, EMPLOYEE_ROLES.HEAD_OF_DEPARTMENT],
+            [EMPLOYEE_ROLES.SENIOR_DEVELOPER]: [EMPLOYEE_ROLES.TEAM_LEADER, EMPLOYEE_ROLES.HEAD_OF_DEPARTMENT],
+            [EMPLOYEE_ROLES.QA_ENGINEER]: [EMPLOYEE_ROLES.TEAM_LEADER, EMPLOYEE_ROLES.HEAD_OF_DEPARTMENT],
+            [EMPLOYEE_ROLES.DEVOPS_ENGINEER]: [EMPLOYEE_ROLES.TEAM_LEADER, EMPLOYEE_ROLES.HEAD_OF_DEPARTMENT]
         };
 
         const extraAllowedRoles = managerRolesByTargetRole[normalizedRole] || [];
@@ -658,8 +697,9 @@ const getPotentialManagers = async (companyId, filters = {}) => {
 
     return managers.map((manager) => ({
         ...manager,
-        role: normalizeRole(manager.role),
-        roleLabel: ROLE_LABELS[normalizeRole(manager.role)] || normalizeRole(manager.role)
+        role: manager.role,
+        baseRole: normalizeRole(manager.role),
+        roleLabel: ROLE_LABELS[normalizeRole(manager.role)] || manager.role || normalizeRole(manager.role)
     }));
 };
 
