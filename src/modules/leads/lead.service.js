@@ -134,7 +134,8 @@ class LeadService {
 
         try {
             const template = templateBuilder(templateParams || {});
-            await addEmailJob(
+            // We don't await this to prevent blocking the response if Redis/BullMQ is slow
+            addEmailJob(
                 {
                     to: recipients.length === 1 ? recipients[0] : recipients,
                     subject: template.subject,
@@ -143,7 +144,9 @@ class LeadService {
                 },
                 delayInMinutes,
                 jobId ? { jobId } : {}
-            );
+            ).catch(err => {
+                console.error(`[LeadService] Async email queue failure: ${err.message}`);
+            });
             return true;
         } catch (error) {
             console.error(`[LeadService] Failed to queue email: ${error.message}`);

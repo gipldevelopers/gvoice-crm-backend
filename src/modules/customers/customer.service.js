@@ -98,9 +98,28 @@ class CustomerService {
             const customer = await prisma.customer.findFirst({ where: { id, companyId } });
             if (!customer) throw new Error('Customer not found');
 
+            // Never allow changing immutable/relational fields via direct scalar updates
+            const updateData = {
+                ...(data.type !== undefined ? { type: data.type } : {}),
+                ...(data.name !== undefined ? { name: data.name } : {}),
+                ...(data.contactPerson !== undefined ? { contactPerson: data.contactPerson } : {}),
+                ...(data.email !== undefined ? { email: data.email } : {}),
+                ...(data.phone !== undefined ? { phone: data.phone } : {}),
+                ...(data.alternatePhone !== undefined ? { alternatePhone: data.alternatePhone } : {}),
+                ...(data.gst !== undefined ? { gst: data.gst } : {}),
+                ...(data.address !== undefined ? { address: data.address } : {}),
+                ...(data.city !== undefined ? { city: data.city } : {}),
+                ...(data.state !== undefined ? { state: data.state } : {}),
+                ...(data.pincode !== undefined ? { pincode: data.pincode } : {}),
+                ...(data.notes !== undefined ? { notes: data.notes } : {}),
+                ...(data.status !== undefined ? { status: data.status } : {}),
+                ...(data.leadId !== undefined ? { leadId: data.leadId } : {}),
+                ...(data.department !== undefined ? { department: data.department } : {}),
+            };
+
             return await prisma.customer.update({
                 where: { id },
-                data,
+                data: updateData,
             });
         } catch (error) {
             throw new Error(`Error updating customer: ${error.message}`);

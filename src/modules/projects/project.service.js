@@ -994,7 +994,10 @@ class ProjectService {
             const text = `Project "${project.name}" (${project.projectId}) has been marked as completed by ${actorUser?.id || 'Tech Team'}.`;
             const html = `<p>Project <strong>${project.name}</strong> (${project.projectId}) has been marked as completed.</p>`;
             try {
-                await addEmailJob({ to: recipients, subject, html, text });
+                // We don't await this to prevent blocking the response if Redis/BullMQ is slow
+                addEmailJob({ to: recipients, subject, html, text }).catch(err => {
+                    console.error(`[ProjectService] Async email queue failure: ${err.message}`);
+                });
             } catch (error) {
                 console.error('[ProjectService] Failed to queue completion email:', error.message);
             }

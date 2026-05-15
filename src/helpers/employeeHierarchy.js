@@ -2,7 +2,10 @@ const EMPLOYEE_ROLES = {
     COMPANY_ADMIN: 'company_admin',
     HEAD_OF_DEPARTMENT: 'head_of_department',
     TEAM_LEADER: 'team_leader',
-    EMPLOYEE: 'employee'
+    EMPLOYEE: 'employee',
+    SENIOR_DEVELOPER: 'senior_developer',
+    QA_ENGINEER: 'qa_engineer',
+    DEVOPS_ENGINEER: 'devops_engineer'
 };
 
 const LEGACY_ROLE_ALIASES = {
@@ -16,7 +19,10 @@ const ROLE_LABELS = {
     [EMPLOYEE_ROLES.COMPANY_ADMIN]: 'Company Admin',
     [EMPLOYEE_ROLES.HEAD_OF_DEPARTMENT]: 'Head of Department',
     [EMPLOYEE_ROLES.TEAM_LEADER]: 'Team Leader',
-    [EMPLOYEE_ROLES.EMPLOYEE]: 'Employee'
+    [EMPLOYEE_ROLES.EMPLOYEE]: 'Employee',
+    [EMPLOYEE_ROLES.SENIOR_DEVELOPER]: 'Senior Developer',
+    [EMPLOYEE_ROLES.QA_ENGINEER]: 'QA Engineer',
+    [EMPLOYEE_ROLES.DEVOPS_ENGINEER]: 'DevOps Engineer'
 };
 
 const normalizeRole = (role) => {
