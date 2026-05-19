@@ -933,11 +933,20 @@ class ProjectService {
                 where: { id: projectId },
             });
 
+            // Reset projectGenerated flag on the associated deal so it can be re-generated
+            if (existingProject.dealId) {
+                await prisma.deal.update({
+                    where: { id: existingProject.dealId },
+                    data: { projectGenerated: false }
+                });
+            }
+
             return { message: 'Project deleted successfully' };
         } catch (error) {
             throw new Error(`Error deleting project: ${error.message}`);
         }
     }
+
 
     async closeProject(projectId, companyId, actorUser) {
         const project = await prisma.project.findFirst({

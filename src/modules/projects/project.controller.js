@@ -144,6 +144,14 @@ class ProjectController {
         try {
             const { id } = req.params;
             const companyId = req.user.companyId;
+            const userRole = req.user.role;
+
+            if (userRole !== 'company_admin') {
+                return res.status(403).json({
+                    success: false,
+                    message: 'Forbidden: Only Company Admin can delete projects',
+                });
+            }
 
             const result = await projectService.deleteProject(id, companyId);
             return res.status(200).json({
@@ -158,6 +166,7 @@ class ProjectController {
             });
         }
     }
+
 
     async acknowledgeProject(req, res) {
         try {
