@@ -920,6 +920,45 @@ class ProjectService {
 
     async deleteProject(projectId, companyId) {
         try {
+            // Case 1: Virtual Deal Project
+            if (projectId.startsWith('deal-')) {
+                const realDealId = projectId.replace('deal-', '');
+                const existingDeal = await prisma.deal.findFirst({
+                    where: {
+                        id: realDealId,
+                        companyId: companyId,
+                    },
+                });
+
+                if (!existingDeal) throw new Error('Project not found');
+
+                await prisma.deal.delete({
+                    where: { id: realDealId },
+                });
+
+                return { message: 'Project deleted successfully' };
+            }
+
+            // Case 2: Virtual Lead Project
+            if (projectId.startsWith('lead-')) {
+                const realLeadId = projectId.replace('lead-', '');
+                const existingLead = await prisma.lead.findFirst({
+                    where: {
+                        id: realLeadId,
+                        companyId: companyId,
+                    },
+                });
+
+                if (!existingLead) throw new Error('Project not found');
+
+                await prisma.lead.delete({
+                    where: { id: realLeadId },
+                });
+
+                return { message: 'Project deleted successfully' };
+            }
+
+            // Case 3: Real Project
             const existingProject = await prisma.project.findFirst({
                 where: {
                     id: projectId,
@@ -929,16 +968,23 @@ class ProjectService {
 
             if (!existingProject) throw new Error('Project not found');
 
-            await prisma.project.delete({
-                where: { id: projectId },
-            });
-
-            // Reset projectGenerated flag on the associated deal so it can be re-generated
-            if (existingProject.dealId) {
-                await prisma.deal.update({
+            if (existingProject.department === 'tech' && existingProject.dealId) {
+                // For in-house projects, delete the placeholder deal which cascades to delete the project
+                await prisma.deal.delete({
                     where: { id: existingProject.dealId },
-                    data: { projectGenerated: false }
                 });
+            } else {
+                // For sales projects, delete the project and reset the deal flag
+                await prisma.project.delete({
+                    where: { id: projectId },
+                });
+
+                if (existingProject.dealId) {
+                    await prisma.deal.update({
+                        where: { id: existingProject.dealId },
+                        data: { projectGenerated: false }
+                    });
+                }
             }
 
             return { message: 'Project deleted successfully' };
@@ -946,6 +992,7 @@ class ProjectService {
             throw new Error(`Error deleting project: ${error.message}`);
         }
     }
+
 
 
     async closeProject(projectId, companyId, actorUser) {
