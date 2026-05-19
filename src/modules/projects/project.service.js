@@ -920,6 +920,45 @@ class ProjectService {
 
     async deleteProject(projectId, companyId) {
         try {
+            // Case 1: Virtual Deal Project
+            if (projectId.startsWith('deal-')) {
+                const realDealId = projectId.replace('deal-', '');
+                const existingDeal = await prisma.deal.findFirst({
+                    where: {
+                        id: realDealId,
+                        companyId: companyId,
+                    },
+                });
+
+                if (!existingDeal) throw new Error('Project not found');
+
+                await prisma.deal.delete({
+                    where: { id: realDealId },
+                });
+
+                return { message: 'Project deleted successfully' };
+            }
+
+            // Case 2: Virtual Lead Project
+            if (projectId.startsWith('lead-')) {
+                const realLeadId = projectId.replace('lead-', '');
+                const existingLead = await prisma.lead.findFirst({
+                    where: {
+                        id: realLeadId,
+                        companyId: companyId,
+                    },
+                });
+
+                if (!existingLead) throw new Error('Project not found');
+
+                await prisma.lead.delete({
+                    where: { id: realLeadId },
+                });
+
+                return { message: 'Project deleted successfully' };
+            }
+
+            // Case 3: Real Project
             const existingProject = await prisma.project.findFirst({
                 where: {
                     id: projectId,
@@ -929,15 +968,32 @@ class ProjectService {
 
             if (!existingProject) throw new Error('Project not found');
 
-            await prisma.project.delete({
-                where: { id: projectId },
-            });
+            if (existingProject.department === 'tech' && existingProject.dealId) {
+                // For in-house projects, delete the placeholder deal which cascades to delete the project
+                await prisma.deal.delete({
+                    where: { id: existingProject.dealId },
+                });
+            } else {
+                // For sales projects, delete the project and reset the deal flag
+                await prisma.project.delete({
+                    where: { id: projectId },
+                });
+
+                if (existingProject.dealId) {
+                    await prisma.deal.update({
+                        where: { id: existingProject.dealId },
+                        data: { projectGenerated: false }
+                    });
+                }
+            }
 
             return { message: 'Project deleted successfully' };
         } catch (error) {
             throw new Error(`Error deleting project: ${error.message}`);
         }
     }
+
+
 
     async closeProject(projectId, companyId, actorUser) {
         const project = await prisma.project.findFirst({
@@ -994,7 +1050,10 @@ class ProjectService {
             const text = `Project "${project.name}" (${project.projectId}) has been marked as completed by ${actorUser?.id || 'Tech Team'}.`;
             const html = `<p>Project <strong>${project.name}</strong> (${project.projectId}) has been marked as completed.</p>`;
             try {
-                await addEmailJob({ to: recipients, subject, html, text });
+                // We don't await this to prevent blocking the response if Redis/BullMQ is slow
+                addEmailJob({ to: recipients, subject, html, text }).catch(err => {
+                    console.error(`[ProjectService] Async email queue failure: ${err.message}`);
+                });
             } catch (error) {
                 console.error('[ProjectService] Failed to queue completion email:', error.message);
             }
