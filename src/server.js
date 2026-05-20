@@ -71,4 +71,4 @@ const shutdown = () => {
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
 
-module.exports = server;
+module.exports = server; // Restarted to reload Prisma Client
