@@ -1,3 +1,4 @@
+// Scoped role management service
 const prisma = require('../../database/prisma');
 
 const getAllRoles = async (companyId) => {
@@ -8,33 +9,33 @@ const getAllRoles = async (companyId) => {
 };
 
 const createRole = async (companyId, data) => {
-    const { name, baseRole } = data;
+    const { name, baseRole, department } = data;
     
-    // Check if role already exists for this company
-    const existing = await prisma.role.findUnique({
+    // Check if role already exists for this company and department
+    const existing = await prisma.role.findFirst({
         where: {
-            companyId_name: {
-                companyId,
-                name: name.trim()
-            }
+            companyId,
+            name: { equals: name.trim(), mode: 'insensitive' },
+            department: department ? { equals: department.trim(), mode: 'insensitive' } : null
         }
     });
 
     if (existing) {
-        throw new Error('Role with this name already exists');
+        throw new Error('Role with this name already exists in this department');
     }
 
     return await prisma.role.create({
         data: {
             name: name.trim(),
             baseRole: baseRole || 'employee',
+            department: department ? department.trim() : null,
             companyId
         }
     });
 };
 
 const updateRole = async (id, companyId, data) => {
-    const { name, baseRole } = data;
+    const { name, baseRole, department } = data;
 
     // Check existence
     const existing = await prisma.role.findFirst({
@@ -45,18 +46,18 @@ const updateRole = async (id, companyId, data) => {
         throw new Error('Role not found');
     }
 
-    // Check if new name already exists for this company
-    if (name && name.trim().toLowerCase() !== existing.name.toLowerCase()) {
-        const duplicate = await prisma.role.findUnique({
+    // Check if new name already exists for this company and department
+    if (name && (name.trim().toLowerCase() !== existing.name.toLowerCase() || (department !== undefined && (department || "").toLowerCase() !== (existing.department || "").toLowerCase()))) {
+        const checkDept = department !== undefined ? department : existing.department;
+        const duplicate = await prisma.role.findFirst({
             where: {
-                companyId_name: {
-                    companyId,
-                    name: name.trim()
-                }
+                companyId,
+                name: { equals: name.trim(), mode: 'insensitive' },
+                department: checkDept ? { equals: checkDept.trim(), mode: 'insensitive' } : null
             }
         });
         if (duplicate) {
-            throw new Error('Another role with this name already exists');
+            throw new Error('Another role with this name already exists in this department');
         }
     }
 
@@ -64,7 +65,8 @@ const updateRole = async (id, companyId, data) => {
         where: { id },
         data: { 
             ...(name && { name: name.trim() }),
-            ...(baseRole && { baseRole })
+            ...(baseRole && { baseRole }),
+            ...(department !== undefined && { department: department ? department.trim() : null })
         }
     });
 };

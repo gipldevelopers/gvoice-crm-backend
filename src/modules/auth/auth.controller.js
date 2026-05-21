@@ -1,4 +1,5 @@
 const authService = require('./auth.service');
+const activityLogService = require('../activity-logs/activityLog.service');
 
 const login = async (req, res, next) => {
     try {
@@ -8,6 +9,10 @@ const login = async (req, res, next) => {
         }
 
         const result = await authService.login(identifier, password);
+
+        // Log login activity
+        await activityLogService.logActivity(result.user.id, result.user.company?.id || result.user.companyId, 'LOGIN', req);
+
         res.status(200).json({
             success: true,
             data: result
@@ -63,6 +68,10 @@ const googleLogin = async (req, res, next) => {
         }
 
         const result = await authService.googleLogin(code);
+
+        // Log Google login activity
+        await activityLogService.logActivity(result.user.id, result.user.company?.id || result.user.companyId, 'LOGIN_GOOGLE', req);
+
         res.status(200).json({
             success: true,
             data: result
@@ -95,10 +104,34 @@ const changePassword = async (req, res, next) => {
     }
 };
 
+const logout = async (req, res, next) => {
+    try {
+        const userId = req.user.id;
+        const companyId = req.user.companyId;
+
+        // Log logout activity
+        await activityLogService.logActivity(userId, companyId, 'LOGOUT', req);
+
+        // Clear user token in DB
+        await authService.clearUserToken(userId);
+
+        res.status(200).json({
+            success: true,
+            message: 'Logged out successfully'
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: error.message
+        });
+    }
+};
+
 module.exports = {
     login,
     getMe,
     getGoogleLoginUrl,
     googleLogin,
-    changePassword
+    changePassword,
+    logout
 };

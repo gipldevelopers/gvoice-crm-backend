@@ -72,12 +72,21 @@ async function main() {
         email: companyEmail,
         address: '123 Tech Park, Silicon Valley',
         logo: 'https://gohilinfotech.com/logo.png',
-        gstNo: '24ABCDE1234F1Z5'
+        gstNo: '24ABCDE1234F1Z5',
+        officeLatitude: 23.0276,
+        officeLongitude: 72.5871
       }
     });
-    console.log('Default company "Gohil Infotech" created.');
+    console.log('Default company "Gohil Infotech" created with default Ahmedabad coordinates.');
   } else {
-    console.log('Default company already exists.');
+    company = await prisma.company.update({
+      where: { id: company.id },
+      data: {
+        officeLatitude: 23.0276,
+        officeLongitude: 72.5871
+      }
+    });
+    console.log('Default company already exists - coordinates updated to Ahmedabad.');
   }
 
   // 4. Create Company Admin User
