@@ -177,10 +177,18 @@ const changePassword = async (userId, currentPassword, newPassword) => {
     return true;
 };
 
+const clearUserToken = async (userId) => {
+    return await prisma.user.update({
+        where: { id: userId },
+        data: { token: null }
+    });
+};
+
 module.exports = {
     login,
     getUserById,
     getGoogleLoginUrl,
     googleLogin,
-    changePassword
+    changePassword,
+    clearUserToken
 };

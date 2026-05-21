@@ -19,6 +19,7 @@ const salesEodRoutes = require('./sales-eod/salesEod.routes');
 const settingsRoutes = require('./settings/setting.routes');
 const departmentRoutes = require('./departments/department.routes');
 const roleRoutes = require('./roles/role.routes');
+const activityLogRoutes = require('./activity-logs/activityLog.routes');
 
 // Define routes
 
@@ -38,6 +39,7 @@ router.use('/sales-eod', salesEodRoutes);
 router.use('/settings', settingsRoutes);
 router.use('/departments', departmentRoutes);
 router.use('/roles', roleRoutes);
+router.use('/activity-logs', activityLogRoutes);
 
 
 module.exports = router;

@@ -1,4 +1,3 @@
-// prisma/schema.prisma
 generator client {
   provider = "prisma-client-js"
 }
@@ -8,27 +7,29 @@ datasource db {
 }
 
 model Company {
-  id        String   @id @default(uuid())
-  name      String
-  email     String?
-  address   String?
-  logo      String?
-  gstNo     String?
-  status    String   @default("active")
-  users     User[]
-  leads     Lead[]
-  customers Customer[]
-  tasks     Task[]
-  deals     Deal[]
-  projects  Project[]
-  eodEntries EodEntry[]
-  techTaskBatches TechTaskBatch[]
-  techTaskItems TechTaskItem[]
+  id              String          @id @default(uuid())
+  name            String
+  email           String?
+  address         String?
+  logo            String?
+  gstNo           String?
+  status          String          @default("active")
+  officeLatitude  Float?
+  officeLongitude Float?
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+  tasks           Task[]
+  customers       Customer[]
+  deals           Deal[]
+  departments     Department[]
+  eodEntries      EodEntry[]
+  leads           Lead[]
+  projects        Project[]
+  roles           Role[]
   salesEodEntries SalesEodEntry[]
-  departments Department[]
-  roles       Role[]
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  techTaskBatches TechTaskBatch[]
+  techTaskItems   TechTaskItem[]
+  users           User[]
 
   @@map("companies")
 }
@@ -37,60 +38,67 @@ model Department {
   id        String   @id @default(uuid())
   name      String
   companyId String
-  company   Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+  company   Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
   @@unique([companyId, name])
   @@map("departments")
 }
 
 model Role {
-  id        String   @id @default(uuid())
-  name      String
-  baseRole  String   @default("employee") // company_admin, head_of_department, team_leader, employee
-  companyId String
-  company   Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id         String   @id @default(uuid())
+  name       String
+  baseRole   String   @default("employee")
+  department String?
+  companyId  String
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  company    Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
-  @@unique([companyId, name])
   @@map("roles")
 }
 
 model User {
-  id         String   @id @default(uuid())
-  username   String   @unique
-  fullName   String
-  email      String   @unique
-  phone      String?
-  password   String
-  department String?
-  teamName   String?
-  role       String   @default("employee")
-  status     String   @default("active")
-  reportsToId String?
-  reportsTo  User?    @relation("UserHierarchy", fields: [reportsToId], references: [id], onDelete: SetNull)
-  directReports User[] @relation("UserHierarchy")
-  token      String?
-  companyId  String
-  company    Company  @relation(fields: [companyId], references: [id])
-  files      File[]
-  leads      Lead[]   @relation("AssignedLeads")
-  leadAuditLogs LeadAuditLog[]
-  leadDocuments LeadDocument[]
-  deals      Deal[]   @relation("AssignedDeals")
-  dealDocuments DealDocument[]
-  dealApprovals DealApproval[]
-  leadApprovals LeadApproval[]
-  assignedProjects Project[] @relation("AssignedPM")
-  projectTasks     ProjectTask[] @relation("ProjectTaskAssignedTo")
-  eodEntries EodEntry[]
-  createdTechTaskBatches TechTaskBatch[] @relation("TechTaskBatchCreatedBy")
-  assignedTechTaskItems TechTaskItem[] @relation("TechTaskItemAssignedTo")
-  salesEodEntries SalesEodEntry[]
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  id                                     String          @id @default(uuid())
+  username                               String          @unique
+  fullName                               String
+  email                                  String          @unique
+  phone                                  String?
+  password                               String
+  department                             String?
+  teamName                               String?
+  role                                   String          @default("employee")
+  status                                 String          @default("active")
+  reportsToId                            String?
+  token                                  String?
+  companyId                              String
+  createdAt                              DateTime        @default(now())
+  updatedAt                              DateTime        @updatedAt
+  reportsToL2Id                          String?
+  reportsToL3Id                          String?
+  dealApprovals                          DealApproval[]
+  dealDocuments                          DealDocument[]
+  deals                                  Deal[]          @relation("AssignedDeals")
+  eodEntries                             EodEntry[]
+  files                                  File[]
+  leadApprovals                          LeadApproval[]
+  leadAuditLogs                          LeadAuditLog[]
+  leadDocuments                          LeadDocument[]
+  leads                                  Lead[]          @relation("AssignedLeads")
+  projectTasks                           ProjectTask[]   @relation("ProjectTaskAssignedTo")
+  assignedProjects                       Project[]       @relation("AssignedPM")
+  salesEodEntries                        SalesEodEntry[]
+  createdTechTaskBatches                 TechTaskBatch[] @relation("TechTaskBatchCreatedBy")
+  assignedTechTaskItems                  TechTaskItem[]  @relation("TechTaskItemAssignedTo")
+  company                                Company         @relation(fields: [companyId], references: [id])
+  reportsTo                              User?           @relation("UserHierarchy", fields: [reportsToId], references: [id])
+  directReports                          User[]          @relation("UserHierarchy")
+  users_users_reportsToL2IdTousers       User?           @relation("users_reportsToL2IdTousers", fields: [reportsToL2Id], references: [id])
+  other_users_users_reportsToL2IdTousers User[]          @relation("users_reportsToL2IdTousers")
+  users_users_reportsToL3IdTousers       User?           @relation("users_reportsToL3IdTousers", fields: [reportsToL3Id], references: [id])
+  other_users_users_reportsToL3IdTousers User[]          @relation("users_reportsToL3IdTousers")
+  activityLogs                           ActivityLog[]
 
   @@index([companyId])
   @@index([companyId, department])
@@ -107,72 +115,69 @@ model File {
   size         Int
   mimetype     String
   userId       String
-  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("files")
 }
 
 model Lead {
-  id             String   @id @default(uuid())
-  name           String
-  phone          String?
-  countryCode    String?
-  email          String?
-  source         String   // Website, WhatsApp, Referral, Ads, Walk-in
-  service        String?
-  value          Float?   // Lead value in currency
-  currency       String?
-  status         String   @default("New") // New, Contacted, Qualified, Lost
-  notes          String?  @db.Text
-  salespersonId  String?
-  salesperson    User?    @relation("AssignedLeads", fields: [salespersonId], references: [id], onDelete: SetNull)
-  companyId      String
-  company        Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  customer       Customer?
-  auditLogs      LeadAuditLog[]
-  documents      LeadDocument[]
-
-  complianceStatus String @default("NA") // NA, PENDING, TL_VERIFICATION, HEAD_APPROVAL, APPROVED, REJECTED
-  approvals      LeadApproval[]
-
-  department     String   @default("sales") // sales, tech
-
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  id               String         @id @default(uuid())
+  name             String
+  phone            String?
+  countryCode      String?
+  email            String?
+  source           String
+  service          String?
+  value            Float?
+  currency         String?
+  status           String         @default("New")
+  notes            String?
+  salespersonId    String?
+  companyId        String
+  complianceStatus String         @default("NA")
+  department       String         @default("sales")
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+  customer         Customer?
+  approvals        LeadApproval[]
+  auditLogs        LeadAuditLog[]
+  documents        LeadDocument[]
+  company          Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  salesperson      User?          @relation("AssignedLeads", fields: [salespersonId], references: [id])
 
   @@map("leads")
 }
 
 model LeadApproval {
-  id            String   @id @default(uuid())
-  leadId        String
-  lead          Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
-  level         String   // "TL_VERIFICATION", "HEAD_APPROVAL"
-  status        String   @default("PENDING") // PENDING, APPROVED, REJECTED
-  approverId    String?
-  approver      User?    @relation(fields: [approverId], references: [id], onDelete: SetNull)
-  comments      String?  @db.Text
-  deadline      DateTime // TAT 24 hours
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
-  
+  id         String   @id @default(uuid())
+  leadId     String
+  level      String
+  status     String   @default("PENDING")
+  approverId String?
+  comments   String?
+  deadline   DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  approver   User?    @relation(fields: [approverId], references: [id])
+  lead       Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
   @@index([leadId, level])
   @@map("lead_approvals")
 }
 
 model LeadAuditLog {
-  id            String   @id @default(cuid())
-  leadId         String
-  lead           Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
-  companyId      String
-  actorUserId    String?
-  actorUser      User?    @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
-  action         String   // CREATE, UPDATE, STATUS_CHANGE, ASSIGN_CHANGE, CLAIM_REQUEST, CONVERT_TO_CUSTOMER, DELETE
-  changes        Json?
-  message        String?
-  createdAt      DateTime @default(now())
+  id          String   @id @default(cuid())
+  leadId      String
+  companyId   String
+  actorUserId String?
+  action      String
+  changes     Json?
+  message     String?
+  createdAt   DateTime @default(now())
+  actorUser   User?    @relation(fields: [actorUserId], references: [id])
+  lead        Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
 
   @@index([leadId, createdAt])
   @@index([companyId, createdAt])
@@ -182,25 +187,25 @@ model LeadAuditLog {
 model LeadDocument {
   id           String   @id @default(uuid())
   leadId       String
-  lead         Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
-  documentType String   // "Initial SOW", "Client BOQ", "MOM Notes"
-  version      Int      // 1, 2, 3...
+  documentType String
+  version      Int
   filename     String
   originalName String
   path         String
   mimetype     String
   size         Int
   uploadedBy   String?
-  uploader     User?    @relation(fields: [uploadedBy], references: [id], onDelete: SetNull)
   createdAt    DateTime @default(now())
-  
+  lead         Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  uploader     User?    @relation(fields: [uploadedBy], references: [id])
+
   @@index([leadId, documentType])
   @@map("lead_documents")
 }
 
 model Customer {
   id             String   @id @default(uuid())
-  type           String   @default("Company") // Company, Individual
+  type           String   @default("Company")
   name           String
   contactPerson  String?
   email          String
@@ -211,80 +216,65 @@ model Customer {
   city           String?
   state          String?
   pincode        String?
-  notes          String?  @db.Text
-  status         String   @default("Active") // Active, Inactive
-
+  notes          String?
+  status         String   @default("Active")
   companyId      String
-  company        Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  
-  // Link to the lead this customer came from (optional)
   leadId         String?  @unique
-  lead           Lead?    @relation(fields: [leadId], references: [id])
-
-  deals          Deal[]
-
-  department     String   @default("sales") // sales, tech
-
+  department     String   @default("sales")
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
+  company        Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  lead           Lead?    @relation(fields: [leadId], references: [id])
+  deals          Deal[]
 
   @@map("customers")
 }
 
 model Deal {
-  id             String   @id @default(uuid())
-  title          String
-  value          Float
-  stage          String   @default("New Deal") // New Deal, Requirement Shared, Quotation Sent, Follow-up, Negotiation, Won, Lost
-  closingDate    DateTime?
-  probability    Int      @default(10)
-  notes          String?  @db.Text
-  
-  salespersonId  String?
-  salesperson    User?    @relation("AssignedDeals", fields: [salespersonId], references: [id], onDelete: SetNull)
-  
-  customerId     String?
-  customer       Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
-  
-  companyId      String
-  company        Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  
-  complianceStatus String @default("PENDING") // PENDING, TL_APPROVED, FINANCE_APPROVED, HEAD_APPROVED, REJECTED
-  projectGenerated Boolean @default(false)
-  
-  documents      DealDocument[]
-  approvals      DealApproval[]
-  project        Project?
-
-  department     String   @default("sales") // sales, tech
-
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  id               String         @id @default(uuid())
+  title            String
+  value            Float
+  stage            String         @default("New Deal")
+  closingDate      DateTime?
+  probability      Int            @default(10)
+  notes            String?
+  salespersonId    String?
+  customerId       String?
+  companyId        String
+  complianceStatus String         @default("PENDING")
+  projectGenerated Boolean        @default(false)
+  department       String         @default("sales")
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+  approvals        DealApproval[]
+  documents        DealDocument[]
+  company          Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  customer         Customer?      @relation(fields: [customerId], references: [id])
+  salesperson      User?          @relation("AssignedDeals", fields: [salespersonId], references: [id])
+  project          Project?
 
   @@map("deals")
 }
 
 model Task {
-  id          String   @id @default(cuid())
-  title       String
-  type        String   // Call, Meeting, Email, WhatsApp
-  linkedType  String   // Lead, Customer, Deal
-  linkedId    String?  // ID of the linked entity
-  linkedTo    String?  // Name of the linked entity
-  assignedTo  String
-  dueDate     DateTime
-  dueTime     String
-  status      String   @default("Pending") // Pending, Completed
-  priority    String   @default("Medium")  // High, Medium, Low
-  notes       String?
-  department  String   @default("sales") // sales, tech
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-  
-  // Relations
-  companyId   String
-  company     Company  @relation(fields: [companyId], references: [id])
-  
+  id         String   @id @default(cuid())
+  title      String
+  type       String
+  linkedType String
+  linkedId   String?
+  linkedTo   String?
+  assignedTo String
+  dueDate    DateTime
+  dueTime    String
+  status     String   @default("Pending")
+  priority   String   @default("Medium")
+  notes      String?
+  department String   @default("sales")
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  companyId  String
+  company    Company  @relation(fields: [companyId], references: [id])
+
   @@index([companyId])
   @@index([status])
   @@index([priority])
@@ -294,129 +284,119 @@ model Task {
 model DealDocument {
   id           String   @id @default(uuid())
   dealId       String
-  deal         Deal     @relation(fields: [dealId], references: [id], onDelete: Cascade)
-  documentType String   // "Final SOW", "Client Approved BOQ", "Advance Payment Proof", "Signed MSA", "Signed NDA"
+  documentType String
   filename     String
   originalName String
   path         String
   mimetype     String
   size         Int
   uploadedBy   String?
-  uploader     User?    @relation(fields: [uploadedBy], references: [id], onDelete: SetNull)
   createdAt    DateTime @default(now())
-  
+  deal         Deal     @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  uploader     User?    @relation(fields: [uploadedBy], references: [id])
+
   @@index([dealId, documentType])
   @@map("deal_documents")
 }
 
 model DealApproval {
-  id            String   @id @default(uuid())
-  dealId        String
-  deal          Deal     @relation(fields: [dealId], references: [id], onDelete: Cascade)
-  level         String   // "TL_VERIFICATION", "FINANCE_CONFIRMATION", "HEAD_APPROVAL"
-  status        String   @default("PENDING") // PENDING, APPROVED, REJECTED
-  approverId    String?
-  approver      User?    @relation(fields: [approverId], references: [id], onDelete: SetNull)
-  comments      String?  @db.Text
-  deadline      DateTime // TAT 24 hours
-  escalated     Boolean  @default(false)
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
-  
+  id         String   @id @default(uuid())
+  dealId     String
+  level      String
+  status     String   @default("PENDING")
+  approverId String?
+  comments   String?
+  deadline   DateTime
+  escalated  Boolean  @default(false)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  approver   User?    @relation(fields: [approverId], references: [id])
+  deal       Deal     @relation(fields: [dealId], references: [id], onDelete: Cascade)
+
   @@index([dealId, level])
   @@map("deal_approvals")
 }
 
 model Project {
-  id            String   @id @default(uuid())
-  projectId     String   @unique
-  name          String
-  dealId        String   @unique
-  deal          Deal     @relation(fields: [dealId], references: [id], onDelete: Cascade)
-  companyId     String
-  company       Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  status        String   @default("Active")
-  department    String   @default("sales") // sales, tech
-  
-  techLeadAcknowledge Boolean  @default(false)
+  id                  String             @id @default(uuid())
+  projectId           String             @unique
+  name                String
+  dealId              String             @unique
+  companyId           String
+  status              String             @default("Active")
+  department          String             @default("sales")
+  techLeadAcknowledge Boolean            @default(false)
   acknowledgedAt      DateTime?
-  escalatedToHead     Boolean  @default(false)
+  escalatedToHead     Boolean            @default(false)
   pmAssignedId        String?
-  pm                  User?    @relation("AssignedPM", fields: [pmAssignedId], references: [id], onDelete: SetNull)
-  
-  // Planning Phase Fields
-  planningStartTime DateTime?
-  planLocked        Boolean  @default(false)
-  planApproved      Boolean  @default(false)
-  milestones        ProjectMilestone[]
-  techTaskBatches   TechTaskBatch[]
-  
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
-  
+  planningStartTime   DateTime?
+  planLocked          Boolean            @default(false)
+  planApproved        Boolean            @default(false)
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
+  milestones          ProjectMilestone[]
+  company             Company            @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  deal                Deal               @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  pm                  User?              @relation("AssignedPM", fields: [pmAssignedId], references: [id])
+  techTaskBatches     TechTaskBatch[]
+
   @@map("projects")
 }
 
 model ProjectMilestone {
-  id          String   @id @default(uuid())
+  id          String        @id @default(uuid())
   title       String
-  description String?  @db.Text
+  description String?
   deadline    DateTime?
-  status      String   @default("Pending") // Pending, Completed
+  status      String        @default("Pending")
   projectId   String
-  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  project     Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
   tasks       ProjectTask[]
-
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
 
   @@map("project_milestones")
 }
 
 model ProjectTask {
-  id          String   @id @default(uuid())
-  title       String
-  description String?  @db.Text
-  deliverable String?  @db.Text          // What the owner must deliver
-  deadline    DateTime?
-  estimatedHours Float?                  // Estimated effort in hours
-  status      String   @default("Pending") // Pending, Accepted, In Progress, Completed, Escalated
-  priority    String   @default("Medium")  // High, Medium, Low
-  
-  // Assignment & Acceptance TAT fields
-  assignedToId       String?
-  assignedTo         User?    @relation("ProjectTaskAssignedTo", fields: [assignedToId], references: [id])
-  assignedAt         DateTime?            // When task was assigned
-  acceptanceStatus   String?              // null, Accepted, Rejected, Escalated
-  acceptedAt         DateTime?            // When task was accepted
-  acceptanceDueAt    DateTime?            // assignedAt + 8 hours
-  escalatedAt        DateTime?            // When escalation was triggered
-  
-  milestoneId  String
-  milestone    ProjectMilestone @relation(fields: [milestoneId], references: [id], onDelete: Cascade)
-
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id               String           @id @default(uuid())
+  title            String
+  description      String?
+  deliverable      String?
+  deadline         DateTime?
+  estimatedHours   Float?
+  status           String           @default("Pending")
+  priority         String           @default("Medium")
+  assignedToId     String?
+  assignedAt       DateTime?
+  acceptanceStatus String?
+  acceptedAt       DateTime?
+  acceptanceDueAt  DateTime?
+  escalatedAt      DateTime?
+  milestoneId      String
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+  assignedTo       User?            @relation("ProjectTaskAssignedTo", fields: [assignedToId], references: [id])
+  milestone        ProjectMilestone @relation(fields: [milestoneId], references: [id], onDelete: Cascade)
 
   @@map("project_tasks")
 }
 
 model EodEntry {
-  id                 String   @id @default(uuid())
-  entryDate          DateTime
-  tasksWorked        Json?
-  hoursLogged        Float?
-  completionPercent  Int?
-  blockers           String?  @db.Text
-  productivityScore  Int?
-  productivityNotes  String?  @db.Text
-  userId             String
-  user               User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  companyId          String
-  company            Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  createdAt          DateTime @default(now())
-  updatedAt          DateTime @updatedAt
+  id                String   @id @default(uuid())
+  entryDate         DateTime
+  tasksWorked       Json?
+  hoursLogged       Float?
+  completionPercent Int?
+  blockers          String?
+  productivityScore Int?
+  productivityNotes String?
+  userId            String
+  companyId         String
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  company           Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, entryDate])
   @@index([companyId, entryDate])
@@ -424,42 +404,42 @@ model EodEntry {
 }
 
 model TechTaskBatch {
-  id            String   @id @default(uuid())
-  headTitle     String
-  projectId     String?
-  project       Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
-  companyId     String
-  company       Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  createdById   String
-  createdBy     User     @relation("TechTaskBatchCreatedBy", fields: [createdById], references: [id], onDelete: Cascade)
-  tasks         TechTaskItem[]
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  id          String         @id @default(uuid())
+  headTitle   String
+  projectId   String?
+  companyId   String
+  createdById String
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+  company     Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  createdBy   User           @relation("TechTaskBatchCreatedBy", fields: [createdById], references: [id], onDelete: Cascade)
+  project     Project?       @relation(fields: [projectId], references: [id])
+  tasks       TechTaskItem[]
 
   @@index([companyId, createdAt])
   @@map("tech_task_batches")
 }
 
 model TechTaskItem {
-  id            String   @id @default(uuid())
-  batchId       String
-  batch         TechTaskBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
-  title         String
-  assignedToId  String?
-  assignedTo    User?    @relation("TechTaskItemAssignedTo", fields: [assignedToId], references: [id], onDelete: SetNull)
+  id             String        @id @default(uuid())
+  batchId        String
+  title          String
+  assignedToId   String?
   estimatedHours Float?
-  notes         String?  @db.Text
-  status        String   @default("Assigned")
-  completionNote String? @db.Text
-  completedAt   DateTime?
-  blockerNote   String?  @db.Text
-  blockedAt     DateTime?
-  failureNote   String?  @db.Text
-  failedAt      DateTime?
-  companyId     String
-  company       Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  notes          String?
+  status         String        @default("Assigned")
+  completionNote String?
+  completedAt    DateTime?
+  blockerNote    String?
+  blockedAt      DateTime?
+  failureNote    String?
+  failedAt       DateTime?
+  companyId      String
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  assignedTo     User?         @relation("TechTaskItemAssignedTo", fields: [assignedToId], references: [id])
+  batch          TechTaskBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  company        Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
   @@index([companyId, assignedToId])
   @@map("tech_task_items")
@@ -471,16 +451,32 @@ model SalesEodEntry {
   leadsWorked     Json?
   trackingItems   Json?
   callsMade       Int?
-  progressUpdates String?  @db.Text
-  blockers        String?  @db.Text
+  progressUpdates String?
+  blockers        String?
   userId          String
-  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   companyId       String
-  company         Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
+  company         Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, entryDate])
   @@index([companyId, entryDate])
   @@map("sales_eod_entries")
+}
+
+model ActivityLog {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  companyId String
+  action    String   // "LOGIN", "LOGOUT", etc.
+  device    String?  // e.g. "Windows / Chrome", "iPhone / Safari"
+  ipAddress String?  // Client IP address
+  location  String?  // Reverse geocoded user location (e.g. Surat, India)
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([companyId])
+  @@map("activity_logs")
 }

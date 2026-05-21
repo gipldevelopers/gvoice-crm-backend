@@ -8,5 +8,6 @@ router.get('/google/url', authController.getGoogleLoginUrl);
 router.post('/google/login', authController.googleLogin);
 router.get('/me', authenticate, authController.getMe);
 router.put('/change-password', authenticate, authController.changePassword);
+router.post('/logout', authenticate, authController.logout);
 
 module.exports = router;

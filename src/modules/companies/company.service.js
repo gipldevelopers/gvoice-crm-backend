@@ -103,7 +103,9 @@ class CompanyService {
                     ...(companyData.address && { address: companyData.address }),
                     ...(companyData.logo && { logo: companyData.logo }),
                     ...(companyData.gstNo && { gstNo: companyData.gstNo }),
-                    ...(companyData.status && { status: companyData.status })
+                    ...(companyData.status && { status: companyData.status }),
+                    officeLatitude: companyData.officeLatitude !== undefined ? (companyData.officeLatitude === "" || companyData.officeLatitude === null ? null : parseFloat(companyData.officeLatitude)) : undefined,
+                    officeLongitude: companyData.officeLongitude !== undefined ? (companyData.officeLongitude === "" || companyData.officeLongitude === null ? null : parseFloat(companyData.officeLongitude)) : undefined
                 },
             });
             return updatedCompany;
